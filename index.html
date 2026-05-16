@@ -169,6 +169,41 @@
         font-size: 13px;
       }
 
+      .verify-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+      }
+
+      .secondary {
+        min-height: 56px;
+        border: 1px solid var(--teal);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--teal);
+        padding: 0 16px;
+        font-weight: 700;
+      }
+
+      .secondary:disabled {
+        cursor: not-allowed;
+        border-color: var(--line-strong);
+        color: #87919d;
+      }
+
+      .verification-status {
+        min-height: 20px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .verification-status.ok {
+        color: var(--teal);
+        font-weight: 700;
+      }
+
       .planner {
         padding: 30px;
       }
@@ -538,6 +573,10 @@
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
+        .verify-row {
+          grid-template-columns: 1fr;
+        }
+
         .summary-grid {
           grid-template-columns: 1fr;
         }
@@ -601,8 +640,19 @@
             </div>
             <div class="field">
               <label for="email">邮箱 <span class="required">*</span></label>
-              <input id="email" name="email" type="email" autocomplete="email" placeholder="请输入您的邮箱" />
+              <div class="verify-row">
+                <input id="email" name="email" type="email" autocomplete="email" placeholder="请输入您的邮箱" />
+                <button class="secondary" id="sendCode" type="button">发送验证码</button>
+              </div>
               <div class="error" id="emailError" aria-live="polite"></div>
+            </div>
+            <div class="field">
+              <label for="emailCode">邮箱验证码 <span class="required">*</span></label>
+              <div class="verify-row">
+                <input id="emailCode" name="emailCode" inputmode="numeric" maxlength="6" placeholder="请输入 6 位验证码" />
+                <button class="secondary" id="verifyCode" type="button">验证</button>
+              </div>
+              <div class="verification-status" id="verificationStatus" aria-live="polite">请先发送验证码并完成邮箱验证。</div>
             </div>
             <p class="helper">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -696,10 +746,18 @@
         selectedDate: "",
         selectedTime: "",
         bookings: [],
+        verifiedEmail: "",
+        verificationMessage: "请先发送验证码并完成邮箱验证。",
+        sendingCode: false,
+        verifyingCode: false,
       };
 
       const nameInput = document.querySelector("#name");
       const emailInput = document.querySelector("#email");
+      const emailCodeInput = document.querySelector("#emailCode");
+      const sendCodeButton = document.querySelector("#sendCode");
+      const verifyCodeButton = document.querySelector("#verifyCode");
+      const verificationStatus = document.querySelector("#verificationStatus");
       const dateTabs = document.querySelector("#dateTabs");
       const slotGroups = document.querySelector("#slotGroups");
       const prevWeek = document.querySelector("#prevWeek");
@@ -737,12 +795,12 @@
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const day = today.getDay();
-        const daysToTuesday = (2 - day + 7) % 7;
-        const firstTuesday = new Date(today);
-        firstTuesday.setDate(today.getDate() + daysToTuesday + offset * 7);
+        const daysToWednesday = (3 - day + 7) % 7;
+        const firstWednesday = new Date(today);
+        firstWednesday.setDate(today.getDate() + daysToWednesday + offset * 7);
         return [0, 1, 2].map((add) => {
-          const date = new Date(firstTuesday);
-          date.setDate(firstTuesday.getDate() + add);
+          const date = new Date(firstWednesday);
+          date.setDate(firstWednesday.getDate() + add);
           return date;
         });
       }
@@ -765,6 +823,14 @@
 
       function isBooked(date, time) {
         return state.bookings.some((booking) => booking.date === date && booking.time === time);
+      }
+
+      function normalizedEmail() {
+        return emailInput.value.trim().toLowerCase();
+      }
+
+      function emailIsVerified() {
+        return Boolean(state.verifiedEmail && state.verifiedEmail === normalizedEmail());
       }
 
       function renderDates() {
@@ -830,13 +896,20 @@
 
       function validateForm() {
         const name = nameInput.value.trim();
-        const email = emailInput.value.trim();
+        const email = normalizedEmail();
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
         document.querySelector("#nameError").textContent = name ? "" : "请输入姓名";
         document.querySelector("#emailError").textContent = email ? (emailOk ? "" : "请输入有效邮箱") : "请输入邮箱";
 
-        const valid = Boolean(name && emailOk && state.selectedDate && state.selectedTime);
+        sendCodeButton.disabled = !emailOk || state.sendingCode;
+        verifyCodeButton.disabled = !emailOk || !emailCodeInput.value.trim() || state.verifyingCode || emailIsVerified();
+        verificationStatus.classList.toggle("ok", emailIsVerified());
+        verificationStatus.textContent = emailIsVerified()
+          ? "邮箱验证已通过。"
+          : state.verificationMessage;
+
+        const valid = Boolean(name && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
         confirmBooking.disabled = !valid;
         return valid;
       }
@@ -851,6 +924,13 @@
         document.querySelector("#summaryName").textContent = nameInput.value.trim() || "-";
         document.querySelector("#summaryEmail").textContent = emailInput.value.trim() || "-";
         validateForm();
+      }
+
+      function resetVerification() {
+        state.verifiedEmail = "";
+        state.verificationMessage = "请先发送验证码并完成邮箱验证。";
+        emailCodeInput.value = "";
+        renderSummary();
       }
 
       function renderRecords() {
@@ -931,6 +1011,56 @@
         input.addEventListener("blur", validateForm);
       });
 
+      emailInput.addEventListener("input", resetVerification);
+      emailCodeInput.addEventListener("input", validateForm);
+
+      sendCodeButton.addEventListener("click", async () => {
+        const email = normalizedEmail();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          validateForm();
+          return;
+        }
+        state.sendingCode = true;
+        validateForm();
+        try {
+          await api("/api/verification/send", {
+            method: "POST",
+            body: JSON.stringify({ email }),
+          });
+          state.verificationMessage = "验证码已发送，请检查邮箱。";
+          showToast("验证码已发送。");
+        } catch (error) {
+          state.verificationMessage = error.message;
+          showToast(error.message);
+        } finally {
+          state.sendingCode = false;
+          validateForm();
+        }
+      });
+
+      verifyCodeButton.addEventListener("click", async () => {
+        const email = normalizedEmail();
+        const code = emailCodeInput.value.trim();
+        state.verifyingCode = true;
+        validateForm();
+        try {
+          await api("/api/verification/verify", {
+            method: "POST",
+            body: JSON.stringify({ email, code }),
+          });
+          state.verifiedEmail = email;
+          state.verificationMessage = "邮箱验证已通过。";
+          showToast("邮箱验证通过。");
+        } catch (error) {
+          state.verifiedEmail = "";
+          state.verificationMessage = error.message;
+          showToast(error.message);
+        } finally {
+          state.verifyingCode = false;
+          validateForm();
+        }
+      });
+
       confirmBooking.addEventListener("click", async () => {
         if (!validateForm()) return;
         if (isBooked(state.selectedDate, state.selectedTime)) {
@@ -946,7 +1076,7 @@
             method: "POST",
             body: JSON.stringify({
               name: nameInput.value.trim(),
-              email: emailInput.value.trim(),
+              email: normalizedEmail(),
               date: state.selectedDate,
               time: state.selectedTime,
             }),

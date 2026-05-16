@@ -4,14 +4,15 @@
 
 ## 功能
 
-- 前台预约页：姓名、邮箱、日期、20 分钟时间段选择。
-- 可预约时间：周二、周三、周四，上午 `09:00-12:00`，下午 `14:00-17:00`。
+- 前台预约页：姓名、邮箱、邮箱验证码、日期、20 分钟时间段选择。
+- 可预约时间：周三、周四、周五，上午 `09:00-12:00`，下午 `14:00-17:00`。
 - 每个时间段 20 分钟，最后可选开始时间为 `11:40` 和 `16:40`。
 - SQLite 数据库存储预约记录。
 - 数据库唯一约束防止同一日期同一时间段被重复预约。
+- 同一个邮箱只能预约一个时间段；创建预约前必须先完成邮箱验证码验证。
 - 前台不显示后台入口，也不会公开预约人的姓名和邮箱。
 - 后台需要密码登录，默认密码为 `aiad-admin-2026`，可用 `ADMIN_PASSWORD` 修改。
-- 后台日历式预览：按日期查看每个时间段的预约人。
+- 后台日历式看板：类似前台周日历，按周查看每个时间点是否已预约。
 - 后台表格预览：按日期范围、时间段、状态、姓名或邮箱筛选。
 - 后台支持取消预约。
 - 导出 CSV 表格，内容跟随后台当前筛选条件。
@@ -51,6 +52,21 @@ bookings.sqlite3
 ADMIN_PASSWORD='your-strong-password' python3 server.py
 ```
 
+邮箱验证码需要配置 SMTP 授权码：
+
+```bash
+SMTP_PASSWORD='your-smtp-authorization-code' python3 server.py
+```
+
+默认 SMTP 服务器为 163 邮箱：
+
+```text
+SMTP_HOST=your-smtp-host
+SMTP_PORT=465
+SMTP_USER=your-smtp-login
+SMTP_USE_SSL=1
+```
+
 ## Docker 运行
 
 ```bash
@@ -61,6 +77,12 @@ docker compose up --build
 
 ```bash
 ADMIN_PASSWORD='your-strong-password' docker compose up --build
+```
+
+如需启用邮箱验证码发送：
+
+```bash
+SMTP_PASSWORD='your-smtp-authorization-code' docker compose up --build
 ```
 
 启动后打开：
@@ -109,7 +131,7 @@ aiad-admin-2026
 - 选择全部时间段、上午、下午，或某一个具体 20 分钟时间段。
 - 按状态筛选：全部、只看已预约、只看可预约。
 - 按预约人姓名或邮箱搜索。
-- 在日历式预览中点击日期和时间段查看详情。
+- 在日历式预约看板中点击日期和时间点查看详情。
 - 在详情面板或表格行中取消预约。
 - 点击“导出表格”导出当前预览条件下的 CSV。
 
@@ -146,6 +168,31 @@ GET /api/bookings
 
 ### 创建预约
 
+创建预约前必须先发送并验证邮箱验证码。
+
+### 发送邮箱验证码
+
+```http
+POST /api/verification/send
+Content-Type: application/json
+
+{
+  "email": "zhangsan@example.com"
+}
+```
+
+### 验证邮箱验证码
+
+```http
+POST /api/verification/verify
+Content-Type: application/json
+
+{
+  "email": "zhangsan@example.com",
+  "code": "123456"
+}
+```
+
 ```http
 POST /api/bookings
 Content-Type: application/json
@@ -158,7 +205,7 @@ Content-Type: application/json
 }
 ```
 
-如果同一日期同一时间已被预约，接口返回 `409`。
+如果同一日期同一时间已被预约，或同一邮箱已经预约过，接口返回 `409`。
 
 ### 取消预约
 
@@ -194,6 +241,15 @@ CSV 使用 UTF-8 BOM，方便用 Excel 打开中文内容。
 | `PORT` | `8000` | 服务端口 |
 | `BOOKING_DB_PATH` | `./bookings.sqlite3` | SQLite 数据库路径 |
 | `ADMIN_PASSWORD` | `aiad-admin-2026` | 后台登录密码 |
+| `SMTP_HOST` | `your-smtp-host` | SMTP 服务器 |
+| `SMTP_PORT` | `465` | SMTP 端口 |
+| `SMTP_USER` | `your-smtp-login` | SMTP 登录账号 |
+| `SMTP_PASSWORD` | 空 | SMTP 授权码；不建议写入代码或提交到仓库 |
+| `SMTP_FROM` | `SMTP_USER` | 发件人地址 |
+| `SMTP_USE_SSL` | `1` | 是否使用 SSL 连接 |
+| `SMTP_STARTTLS` | `0` | 非 SSL 模式下是否启用 STARTTLS |
+| `VERIFICATION_TTL_MINUTES` | `10` | 验证码有效分钟数 |
+| `VERIFICATION_RESEND_SECONDS` | `60` | 同一邮箱重新发送验证码的等待秒数 |
 
 Dockerfile 中默认：
 
@@ -202,6 +258,10 @@ HOST=0.0.0.0
 PORT=8000
 BOOKING_DB_PATH=/data/bookings.sqlite3
 ADMIN_PASSWORD=aiad-admin-2026
+SMTP_HOST=your-smtp-host
+SMTP_PORT=465
+SMTP_USER=your-smtp-login
+SMTP_USE_SSL=1
 ```
 
 ## 测试
@@ -212,15 +272,15 @@ Python 语法检查：
 python3 -m py_compile server.py
 ```
 
-接口快速测试示例：
+预约创建接口快速测试需要先完成邮箱验证。验证码发送接口示例：
 
 ```bash
 curl -s -H 'Content-Type: application/json' \
-  -d '{"name":"张三","email":"zhangsan@example.com","date":"2026-05-19","time":"09:00"}' \
-  http://127.0.0.1:8000/api/bookings
+  -d '{"email":"zhangsan@example.com"}' \
+  http://127.0.0.1:8000/api/verification/send
 ```
 
-重复提交同一 `date + time` 应返回冲突错误。
+完成验证码验证后，重复提交同一 `date + time` 或同一邮箱应返回冲突错误。
 
 后台接口测试示例：
 
