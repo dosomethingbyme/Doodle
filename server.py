@@ -35,9 +35,10 @@ def load_env_file(path):
 load_env_file(ROOT / ".env")
 
 DB_PATH = Path(os.environ.get("BOOKING_DB_PATH", ROOT / "bookings.sqlite3"))
+SLOT_MINUTES = 15
 VALID_TIMES = [
-    *(f"{hour:02d}:{minute:02d}" for hour in range(9, 12) for minute in (0, 20, 40)),
-    *(f"{hour:02d}:{minute:02d}" for hour in range(14, 17) for minute in (0, 20, 40)),
+    *(f"{hour:02d}:{minute:02d}" for hour in range(9, 12) for minute in range(0, 60, SLOT_MINUTES)),
+    *(f"{hour:02d}:{minute:02d}" for hour in range(13, 17) for minute in range(0, 60, SLOT_MINUTES)),
 ]
 BOOKING_START_DATE = date(2026, 5, 20)
 BOOKING_END_DATE = date(2026, 5, 22)
@@ -85,6 +86,18 @@ def init_db():
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bookings_date_time ON bookings(date, time)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blocked_slots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(date, time)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_blocked_slots_date_time ON blocked_slots(date, time)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS email_verifications (
@@ -141,7 +154,7 @@ def validate_booking(payload):
     if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
         return None, "只能预约 2026-05-20 至 2026-05-22 的时间段"
     if booking_time not in VALID_TIMES:
-        return None, "请选择有效的 20 分钟时间窗"
+        return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 
     return {"name": name, "email": email, "date": booking_date, "time": booking_time}, None
 
@@ -159,9 +172,24 @@ def validate_booking_slot(payload):
     if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
         return None, "只能预约 2026-05-20 至 2026-05-22 的时间段"
     if booking_time not in VALID_TIMES:
-        return None, "请选择有效的 20 分钟时间窗"
+        return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 
     return {"email": email, "date": booking_date, "time": booking_time}, None
+
+
+def validate_slot(payload):
+    booking_date = str(payload.get("date", "")).strip()
+    booking_time = str(payload.get("time", "")).strip()
+    parsed = parse_date(booking_date)
+
+    if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
+        return None, f"只能选择{WEEKDAY_LABEL}"
+    if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
+        return None, "只能选择 2026-05-20 至 2026-05-22 的时间段"
+    if booking_time not in VALID_TIMES:
+        return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
+
+    return {"date": booking_date, "time": booking_time}, None
 
 
 def normalize_email(value):
@@ -228,7 +256,7 @@ def send_booking_confirmation_email(booking):
                 "您的 AIAD 样机测试预约已成功。",
                 "",
                 f"预约日期：{booking['date']}",
-                f"预约时间：{booking['time']} - {add_minutes(booking['time'], 20)}",
+                f"预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
                 f"测试地点：{TEST_LOCATION}",
                 "",
                 "如需调整预约，请回到预约页并通过邮箱验证码修改预约时间。",
@@ -253,7 +281,7 @@ def send_booking_update_email(booking):
                 "您的 AIAD 样机测试预约时间已修改。",
                 "",
                 f"新的预约日期：{booking['date']}",
-                f"新的预约时间：{booking['time']} - {add_minutes(booking['time'], 20)}",
+                f"新的预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
                 f"测试地点：{TEST_LOCATION}",
                 "",
                 "AIAD 预约系统",
@@ -292,6 +320,20 @@ def find_current_window_booking(conn, email):
     ).fetchone()
 
 
+def slot_is_blocked(conn, booking_date, booking_time):
+    return conn.execute(
+        "SELECT 1 FROM blocked_slots WHERE date = ? AND time = ?",
+        (booking_date, booking_time),
+    ).fetchone() is not None
+
+
+def slot_has_booking(conn, booking_date, booking_time):
+    return conn.execute(
+        "SELECT 1 FROM bookings WHERE date = ? AND time = ?",
+        (booking_date, booking_time),
+    ).fetchone() is not None
+
+
 def booking_dates():
     current = BOOKING_START_DATE
     dates = []
@@ -326,7 +368,7 @@ def query_times(query):
     if selected == "morning":
         return [item for item in VALID_TIMES if item < "12:00"]
     if selected == "afternoon":
-        return [item for item in VALID_TIMES if item >= "14:00"]
+        return [item for item in VALID_TIMES if item >= "13:00"]
     if selected in VALID_TIMES:
         return [selected]
     return VALID_TIMES
@@ -339,11 +381,12 @@ def build_schedule_rows(query):
     search = query.get("search", [""])[0].strip().lower()
     keys = [item.isoformat() for item in dates]
 
-    by_slot = {}
+    bookings_by_slot = {}
+    blocked_slots = set()
     if keys:
         placeholders = ",".join("?" for _ in keys)
         with connect() as conn:
-            rows = conn.execute(
+            booking_rows = conn.execute(
                 f"""
                 SELECT id, name, email, date, time, created_at
                 FROM bookings
@@ -352,16 +395,30 @@ def build_schedule_rows(query):
                 """,
                 keys,
             ).fetchall()
-        by_slot = {(row["date"], row["time"]): row for row in rows}
+            blocked_rows = conn.execute(
+                f"""
+                SELECT date, time
+                FROM blocked_slots
+                WHERE date IN ({placeholders})
+                ORDER BY date, time
+                """,
+                keys,
+            ).fetchall()
+        bookings_by_slot = {(row["date"], row["time"]): row for row in booking_rows}
+        blocked_slots = {(row["date"], row["time"]) for row in blocked_rows}
 
     csv_rows = []
     for current in dates:
         for booking_time in times:
-            row = by_slot.get((current.isoformat(), booking_time))
+            slot_key = (current.isoformat(), booking_time)
+            row = bookings_by_slot.get(slot_key)
             is_booked = row is not None
+            is_blocked = slot_key in blocked_slots
             if status == "booked" and not is_booked:
                 continue
-            if status == "available" and is_booked:
+            if status == "blocked" and (is_booked or not is_blocked):
+                continue
+            if status == "available" and (is_booked or is_blocked):
                 continue
             if search and (not row or search not in f"{row['name']} {row['email']}".lower()):
                 continue
@@ -369,8 +426,8 @@ def build_schedule_rows(query):
                 {
                     "日期": current.isoformat(),
                     "星期": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][current.weekday()],
-                    "时间段": f"{booking_time}-{add_minutes(booking_time, 20)}",
-                    "状态": "已预约" if row else "可预约",
+                    "时间段": f"{booking_time}-{add_minutes(booking_time, SLOT_MINUTES)}",
+                    "状态": "已预约" if row else ("已占用" if is_blocked else "可预约"),
                     "姓名": row["name"] if row else "",
                     "邮箱": row["email"] if row else "",
                     "提交时间": row["created_at"] if row else "",
@@ -400,6 +457,11 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 return
             self.list_bookings()
             return
+        if parsed.path == "/api/blocked-slots":
+            if not self.require_admin():
+                return
+            self.list_blocked_slots()
+            return
         if parsed.path == "/api/export.csv":
             if not self.require_admin():
                 return
@@ -424,6 +486,11 @@ class BookingHandler(SimpleHTTPRequestHandler):
         if path == "/api/bookings":
             self.create_booking()
             return
+        if path == "/api/blocked-slots":
+            if not self.require_admin():
+                return
+            self.create_blocked_slot()
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_PUT(self):
@@ -439,6 +506,11 @@ class BookingHandler(SimpleHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.delete_booking(path.rsplit("/", 1)[-1])
+            return
+        if path == "/api/blocked-slots":
+            if not self.require_admin():
+                return
+            self.delete_blocked_slot()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -522,9 +594,18 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 SELECT date, time
                 FROM bookings
                 WHERE date BETWEEN ? AND ?
+                UNION
+                SELECT date, time
+                FROM blocked_slots
+                WHERE date BETWEEN ? AND ?
                 ORDER BY date, time
                 """,
-                (BOOKING_START_DATE.isoformat(), BOOKING_END_DATE.isoformat()),
+                (
+                    BOOKING_START_DATE.isoformat(),
+                    BOOKING_END_DATE.isoformat(),
+                    BOOKING_START_DATE.isoformat(),
+                    BOOKING_END_DATE.isoformat(),
+                ),
             ).fetchall()
         self.send_json([{"date": row["date"], "time": row["time"]} for row in rows])
 
@@ -534,6 +615,29 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 "SELECT id, name, email, date, time, created_at FROM bookings ORDER BY date, time"
             ).fetchall()
         self.send_json([row_to_dict(row) for row in rows])
+
+    def list_blocked_slots(self):
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, date, time, created_at
+                FROM blocked_slots
+                WHERE date BETWEEN ? AND ?
+                ORDER BY date, time
+                """,
+                (BOOKING_START_DATE.isoformat(), BOOKING_END_DATE.isoformat()),
+            ).fetchall()
+        self.send_json(
+            [
+                {
+                    "id": row["id"],
+                    "date": row["date"],
+                    "time": row["time"],
+                    "createdAt": row["created_at"],
+                }
+                for row in rows
+            ]
+        )
 
     def send_email_code(self):
         try:
@@ -667,6 +771,9 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 if not verification_is_valid(conn, booking["email"]):
                     self.send_json({"error": "请先完成邮箱验证码验证。"}, HTTPStatus.FORBIDDEN)
                     return
+                if slot_is_blocked(conn, booking["date"], booking["time"]):
+                    self.send_json({"error": "该时间已被后台占用，请选择其他时间。"}, HTTPStatus.CONFLICT)
+                    return
                 cursor = conn.execute(
                     """
                     INSERT INTO bookings (name, email, date, time, created_at)
@@ -723,6 +830,9 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 if existing_booking["date"] == slot["date"] and existing_booking["time"] == slot["time"]:
                     self.send_json({"error": "请选择一个新的预约时间。"}, HTTPStatus.BAD_REQUEST)
                     return
+                if slot_is_blocked(conn, slot["date"], slot["time"]):
+                    self.send_json({"error": "该时间已被后台占用，请选择其他时间。"}, HTTPStatus.CONFLICT)
+                    return
 
                 conn.execute(
                     "UPDATE bookings SET date = ?, time = ? WHERE id = ?",
@@ -743,6 +853,75 @@ class BookingHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             response["emailWarning"] = f"预约时间已修改，但通知邮件发送失败：{exc}"
         self.send_json(response)
+
+    def create_blocked_slot(self):
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        slot, error = validate_slot(payload)
+        if error:
+            self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if slot_has_booking(conn, slot["date"], slot["time"]):
+                    self.send_json({"error": "该时间已有预约，不能占用。"}, HTTPStatus.CONFLICT)
+                    return
+                cursor = conn.execute(
+                    """
+                    INSERT INTO blocked_slots (date, time, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (slot["date"], slot["time"], format_dt(datetime.now())),
+                )
+                row = conn.execute(
+                    "SELECT id, date, time, created_at FROM blocked_slots WHERE id = ?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+        except sqlite3.IntegrityError:
+            self.send_json({"error": "该时间已被占用。"}, HTTPStatus.CONFLICT)
+            return
+
+        self.send_json(
+            {
+                "id": row["id"],
+                "date": row["date"],
+                "time": row["time"],
+                "createdAt": row["created_at"],
+            },
+            HTTPStatus.CREATED,
+        )
+
+    def delete_blocked_slot(self):
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        slot, error = validate_slot(payload)
+        if error:
+            self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)
+            return
+
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if slot_has_booking(conn, slot["date"], slot["time"]):
+                self.send_json({"error": "该时间已有预约，不能释放。"}, HTTPStatus.CONFLICT)
+                return
+            cursor = conn.execute(
+                "DELETE FROM blocked_slots WHERE date = ? AND time = ?",
+                (slot["date"], slot["time"]),
+            )
+        if cursor.rowcount == 0:
+            self.send_json({"error": "该时间没有后台占用记录。"}, HTTPStatus.NOT_FOUND)
+            return
+        self.send_json({"ok": True})
 
     def delete_booking(self, booking_id):
         if not booking_id.isdigit():

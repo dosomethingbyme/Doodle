@@ -12,6 +12,8 @@
         --line: #d9e2e6;
         --teal: #087b7d;
         --teal-soft: #e8f6f5;
+        --amber: #9a5b00;
+        --amber-soft: #fff4dc;
         --red: #d53f4c;
         --shadow: 0 18px 50px rgba(23, 33, 47, 0.08);
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -115,6 +117,12 @@
         color: #fff;
       }
 
+      .button.warning {
+        border-color: rgba(154, 91, 0, 0.55);
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
       .top-actions {
         display: flex;
         align-items: center;
@@ -208,7 +216,7 @@
 
       .summary {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 14px;
         margin-bottom: 16px;
       }
@@ -286,6 +294,11 @@
 
       .legend-swatch.booked {
         background: var(--teal-soft);
+      }
+
+      .legend-swatch.blocked {
+        border-color: rgba(154, 91, 0, 0.55);
+        background: var(--amber-soft);
       }
 
       .date-tabs {
@@ -367,6 +380,7 @@
         cursor: pointer;
         padding: 9px 10px;
         text-align: center;
+        user-select: none;
       }
 
       .slot-card strong,
@@ -397,6 +411,11 @@
         background: var(--teal-soft);
       }
 
+      .slot-card.blocked {
+        border-color: rgba(154, 91, 0, 0.58);
+        background: var(--amber-soft);
+      }
+
       .slot-card.selected {
         border-color: var(--teal);
         background: var(--teal);
@@ -405,6 +424,12 @@
 
       .slot-card.selected span {
         color: rgba(255, 255, 255, 0.84);
+      }
+
+      .selection-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
       }
 
       .slot-detail {
@@ -483,6 +508,11 @@
       .status.booked {
         background: var(--teal-soft);
         color: var(--teal);
+      }
+
+      .status.blocked {
+        background: var(--amber-soft);
+        color: var(--amber);
       }
 
       .danger {
@@ -612,6 +642,7 @@
             <select id="statusFilter">
               <option value="all">全部</option>
               <option value="booked">只看已预约</option>
+              <option value="blocked">只看已占用</option>
               <option value="available">只看可预约</option>
             </select>
           </div>
@@ -640,6 +671,10 @@
             <strong id="bookedSlots">0</strong>
           </div>
           <div class="panel stat">
+            <span>后台占用</span>
+            <strong id="blockedSlots">0</strong>
+          </div>
+          <div class="panel stat">
             <span>可预约</span>
             <strong id="availableSlots">0</strong>
           </div>
@@ -652,12 +687,18 @@
         <section class="panel calendar" aria-label="日历式预约预览">
           <div class="preview-head">
             <h2>日历式预约看板</h2>
-            <span id="calendarInfo">按周查看每个 20 分钟时间点是否已被预约。</span>
+            <span id="calendarInfo">按周查看每个 15 分钟时间点是否已被预约。</span>
           </div>
           <div class="calendar-toolbar">
             <div class="admin-legend" aria-label="时间状态说明">
               <span><span class="legend-swatch"></span>可预约</span>
               <span><span class="legend-swatch booked"></span>已预约</span>
+              <span><span class="legend-swatch blocked"></span>已占用</span>
+            </div>
+            <div class="selection-actions" aria-label="批量选择">
+              <button class="button" type="button" id="selectAvailableSlots">选择当天可预约</button>
+              <button class="button warning" type="button" id="selectBlockedSlots">选择当天已占用</button>
+              <button class="button" type="button" id="clearCalendarSelection">清空选择</button>
             </div>
           </div>
           <div class="date-tabs" id="calendarDateTabs" role="tablist" aria-label="预览日期"></div>
@@ -699,8 +740,9 @@
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", weekday: "short" });
       const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
-      const VALID_TIMES = [...rangeTimes(9, 12), ...rangeTimes(14, 17)];
-      const state = { bookings: [], previewRows: [], selectedDate: "", selectedSlotKey: "" };
+      const SLOT_MINUTES = 15;
+      const VALID_TIMES = [...rangeTimes(9, 12), ...rangeTimes(13, 17)];
+      const state = { bookings: [], blockedSlots: [], previewRows: [], selectedDate: "", selectedSlotKeys: new Set() };
 
       const loginPanel = document.querySelector("#loginPanel");
       const adminApp = document.querySelector("#adminApp");
@@ -723,7 +765,7 @@
 
       function rangeTimes(startHour, endHour) {
         const result = [];
-        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += 20) {
+        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += SLOT_MINUTES) {
           const h = Math.floor(minutes / 60);
           const m = minutes % 60;
           result.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
@@ -736,7 +778,7 @@
         timeFilter.innerHTML = `
           <option value="all">全部时间段</option>
           <option value="morning">上午 09:00-12:00</option>
-          <option value="afternoon">下午 14:00-17:00</option>
+          <option value="afternoon">下午 13:00-17:00</option>
           ${exact}
         `;
       }
@@ -807,30 +849,48 @@
 
       function selectedTimes() {
         if (timeFilter.value === "morning") return VALID_TIMES.filter((time) => time < "12:00");
-        if (timeFilter.value === "afternoon") return VALID_TIMES.filter((time) => time >= "14:00");
+        if (timeFilter.value === "afternoon") return VALID_TIMES.filter((time) => time >= "13:00");
         if (VALID_TIMES.includes(timeFilter.value)) return [timeFilter.value];
         return VALID_TIMES;
       }
 
       function endTime(start) {
         const [h, m] = start.split(":").map(Number);
-        const total = h * 60 + m + 20;
+        const total = h * 60 + m + SLOT_MINUTES;
         return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+      }
+
+      function slotKey(row) {
+        return `${dateKey(row.date)}-${row.time}`;
+      }
+
+      function selectedRows() {
+        return state.previewRows.filter((row) => state.selectedSlotKeys.has(slotKey(row)));
+      }
+
+      function pruneSelectedSlots() {
+        const visibleKeys = new Set(state.previewRows.map(slotKey));
+        [...state.selectedSlotKeys].forEach((key) => {
+          if (!visibleKeys.has(key)) state.selectedSlotKeys.delete(key);
+        });
       }
 
       function buildPreviewRows() {
         const bookingsBySlot = new Map(state.bookings.map((booking) => [`${booking.date}-${booking.time}`, booking]));
+        const blockedBySlot = new Map(state.blockedSlots.map((slot) => [`${slot.date}-${slot.time}`, slot]));
         const search = searchInput.value.trim().toLowerCase();
         return selectedDates()
           .flatMap((date) =>
             selectedTimes().map((time) => {
               const booking = bookingsBySlot.get(`${dateKey(date)}-${time}`);
-              return { date, time, booking };
+              const blockedSlot = blockedBySlot.get(`${dateKey(date)}-${time}`);
+              return { date, time, booking, blocked: Boolean(blockedSlot), blockedSlot };
             })
           )
           .filter((row) => {
             if (statusFilter.value === "booked" && !row.booking) return false;
-            if (statusFilter.value === "available" && row.booking) return false;
+            if (statusFilter.value === "blocked" && (row.booking || !row.blocked)) return false;
+            if (statusFilter.value === "available" && (row.booking || row.blocked)) return false;
             if (search && (!row.booking || !`${row.booking.name} ${row.booking.email}`.toLowerCase().includes(search))) return false;
             return true;
           });
@@ -840,18 +900,26 @@
         return state.previewRows.filter((row) => dateKey(row.date) === state.selectedDate);
       }
 
+      function rowsForSelectedKeys() {
+        const rowsByKey = new Map(state.previewRows.map((row) => [slotKey(row), row]));
+        return [...state.selectedSlotKeys].map((key) => rowsByKey.get(key)).filter(Boolean);
+      }
+
       function render() {
         state.previewRows = buildPreviewRows();
         const dates = selectedDates();
         if (!dates.some((date) => dateKey(date) === state.selectedDate)) {
           state.selectedDate = dates.length ? dateKey(dates[0]) : "";
-          state.selectedSlotKey = "";
+          state.selectedSlotKeys.clear();
         }
+        pruneSelectedSlots();
         const booked = state.previewRows.filter((row) => row.booking).length;
+        const blocked = state.previewRows.filter((row) => !row.booking && row.blocked).length;
         const total = state.previewRows.length;
         document.querySelector("#totalSlots").textContent = total;
         document.querySelector("#bookedSlots").textContent = booked;
-        document.querySelector("#availableSlots").textContent = total - booked;
+        document.querySelector("#blockedSlots").textContent = blocked;
+        document.querySelector("#availableSlots").textContent = total - booked - blocked;
         document.querySelector("#allBookings").textContent = state.bookings.length;
         previewInfo.textContent = `${startDateInput.value || "-"} 至 ${endDateInput.value || "-"}，共 ${total} 个预览时间段`;
         exportLink.href = `/api/export.csv?${exportParams().toString()}`;
@@ -864,17 +932,29 @@
 
       function renderRow(row) {
         const booking = row.booking;
+        const statusClass = booking ? "booked" : row.blocked ? "blocked" : "";
+        const statusText = booking ? "已预约" : row.blocked ? "已占用" : "可预约";
         return `
           <tr>
             <td><strong>${FULL_DATE.format(row.date)}</strong></td>
             <td><strong>${row.time} - ${endTime(row.time)}</strong></td>
-            <td><span class="status ${booking ? "booked" : ""}">${booking ? "已预约" : "可预约"}</span></td>
+            <td><span class="status ${statusClass}">${statusText}</span></td>
             <td>${booking ? escapeHtml(booking.name) : "-"}</td>
             <td>${booking ? escapeHtml(booking.email) : "-"}</td>
-            <td>${booking ? escapeHtml(booking.createdAt) : "-"}</td>
-            <td>${booking ? `<button class="danger" type="button" data-delete="${booking.id}">取消</button>` : "-"}</td>
+            <td>${booking ? escapeHtml(booking.createdAt) : row.blockedSlot ? escapeHtml(row.blockedSlot.createdAt) : "-"}</td>
+            <td>${renderRowAction(row)}</td>
           </tr>
         `;
+      }
+
+      function renderRowAction(row) {
+        if (row.booking) {
+          return `<button class="danger" type="button" data-delete="${row.booking.id}">取消</button>`;
+        }
+        const action = row.blocked ? "release" : "block";
+        const label = row.blocked ? "释放" : "占用";
+        const className = row.blocked ? "button warning" : "button";
+        return `<button class="${className}" type="button" data-block-action="${action}" data-block-date="${dateKey(row.date)}" data-block-time="${row.time}">${label}</button>`;
       }
 
       function renderCalendar() {
@@ -887,7 +967,7 @@
         });
 
         calendarInfo.textContent = dates.length
-          ? `${startDateInput.value} 至 ${endDateInput.value}，点击日期和时间段查看详情`
+          ? `${startDateInput.value} 至 ${endDateInput.value}，已选 ${state.selectedSlotKeys.size} 个时间段`
           : "当前日期范围内没有周三、周四或周五。";
         calendarDateTabs.innerHTML = dates.length
           ? dates
@@ -895,10 +975,11 @@
                 const key = dateKey(date);
                 const rows = rowsByDate.get(key) || [];
                 const booked = rows.filter((row) => row.booking).length;
+                const blocked = rows.filter((row) => !row.booking && row.blocked).length;
                 return `
                   <button class="date-tab" type="button" role="tab" aria-selected="${key === state.selectedDate}" data-calendar-date="${key}">
                     <strong>${FULL_DATE.format(date)}</strong>
-                    <span>${booked}/${rows.length} 已预约</span>
+                    <span>${booked} 预约 / ${blocked} 占用</span>
                   </button>
                 `;
               })
@@ -908,19 +989,17 @@
         const rows = rowsForSelectedDate();
         if (!rows.length) {
           calendarSlots.innerHTML = `<div class="slot-detail">当前日期没有符合筛选条件的时间段。</div>`;
-          renderSlotDetail(null);
+          renderSlotDetail();
           return;
         }
 
-        const selectedRow = rows.find((row) => `${dateKey(row.date)}-${row.time}` === state.selectedSlotKey) || rows[0];
-        state.selectedSlotKey = `${dateKey(selectedRow.date)}-${selectedRow.time}`;
         const morning = rows.filter((row) => row.time < "12:00");
-        const afternoon = rows.filter((row) => row.time >= "14:00");
+        const afternoon = rows.filter((row) => row.time >= "13:00");
         calendarSlots.innerHTML = [
           renderSlotGroup("上午", "09:00-12:00", morning),
-          renderSlotGroup("下午", "14:00-17:00", afternoon),
+          renderSlotGroup("下午", "13:00-17:00", afternoon),
         ].join("");
-        renderSlotDetail(selectedRow);
+        renderSlotDetail();
       }
 
       function renderSlotGroup(label, range, rows) {
@@ -942,32 +1021,72 @@
       }
 
       function renderSlotCard(row) {
-        const key = `${dateKey(row.date)}-${row.time}`;
+        const key = slotKey(row);
         const booking = row.booking;
+        const statusClass = booking ? "booked" : row.blocked ? "blocked" : "";
+        const statusText = booking ? "已预约" : row.blocked ? "已占用" : "可预约";
         return `
-          <button class="slot-card ${booking ? "booked" : ""} ${key === state.selectedSlotKey ? "selected" : ""}" type="button" data-slot-key="${key}">
+          <button class="slot-card ${statusClass} ${state.selectedSlotKeys.has(key) ? "selected" : ""}" type="button" data-slot-key="${key}" aria-pressed="${state.selectedSlotKeys.has(key)}">
             <strong>${row.time} - ${endTime(row.time)}</strong>
-            <span class="slot-state">${booking ? "已预约" : "可预约"}</span>
-            <span>${booking ? `${escapeHtml(booking.name)} · ${escapeHtml(booking.email)}` : "空闲"}</span>
+            <span class="slot-state">${statusText}</span>
           </button>
         `;
       }
 
-      function renderSlotDetail(row) {
-        if (!row) {
-          slotDetail.innerHTML = `<h3>时间段详情</h3><div class="detail-list">请选择一个日期和时间段。</div>`;
+      function renderSlotDetail() {
+        const rows = rowsForSelectedKeys();
+        if (!rows.length) {
+          slotDetail.innerHTML = `<h3>已选时间段</h3><div class="detail-list">未选择时间段。</div>`;
           return;
         }
+        if (rows.length === 1) {
+          renderSingleSlotDetail(rows[0]);
+          return;
+        }
+
+        const available = rows.filter((row) => !row.booking && !row.blocked);
+        const blocked = rows.filter((row) => !row.booking && row.blocked);
+        const booked = rows.filter((row) => row.booking);
+        const sample = rows
+          .slice(0, 5)
+          .map((row) => `${FULL_DATE.format(row.date)} ${row.time}`)
+          .join("、");
+        slotDetail.innerHTML = `
+          <h3>已选时间段</h3>
+          <div class="detail-list">
+            <span>合计<strong>${rows.length}</strong></span>
+            <span>可占用<strong>${available.length}</strong></span>
+            <span>可释放<strong>${blocked.length}</strong></span>
+            <span>已预约<strong>${booked.length}</strong></span>
+            <span>已选<strong>${escapeHtml(sample)}${rows.length > 5 ? " ..." : ""}</strong></span>
+            <div class="selection-actions">
+              ${available.length ? `<button class="button primary" type="button" data-bulk-action="block">占用所选可用时间</button>` : ""}
+              ${blocked.length ? `<button class="button warning" type="button" data-bulk-action="release">释放所选占用</button>` : ""}
+              <button class="button" type="button" data-clear-selection="1">清空选择</button>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderSingleSlotDetail(row) {
         const booking = row.booking;
+        const statusText = booking ? "已预约" : row.blocked ? "已占用" : "可预约";
         slotDetail.innerHTML = `
           <h3>时间段详情</h3>
           <div class="detail-list">
             <span>日期<strong>${FULL_DATE.format(row.date)}</strong></span>
             <span>时间<strong>${row.time} - ${endTime(row.time)}</strong></span>
-            <span>状态<strong>${booking ? "已预约" : "可预约"}</strong></span>
+            <span>状态<strong>${statusText}</strong></span>
             <span>预约人<strong>${booking ? escapeHtml(booking.name) : "-"}</strong></span>
             <span>邮箱<strong>${booking ? escapeHtml(booking.email) : "-"}</strong></span>
-            <span>提交时间<strong>${booking ? escapeHtml(booking.createdAt) : "-"}</strong></span>
+            <span>提交时间<strong>${booking ? escapeHtml(booking.createdAt) : row.blockedSlot ? escapeHtml(row.blockedSlot.createdAt) : "-"}</strong></span>
+            ${
+              !booking
+                ? `<button class="button ${row.blocked ? "warning" : "primary"}" type="button" data-block-action="${row.blocked ? "release" : "block"}" data-block-date="${dateKey(row.date)}" data-block-time="${row.time}">
+                    ${row.blocked ? "释放此占用" : "占用此时间段"}
+                  </button>`
+                : ""
+            }
             ${booking ? `<button class="button" type="button" data-delete="${booking.id}">取消此预约</button>` : ""}
           </div>
         `;
@@ -1017,16 +1136,80 @@
 
       async function refresh() {
         try {
-          state.bookings = await api("/api/bookings");
+          const [bookings, blockedSlots] = await Promise.all([api("/api/bookings"), api("/api/blocked-slots")]);
+          state.bookings = bookings;
+          state.blockedSlots = blockedSlots;
           render();
         } catch (error) {
           showToast(error.message);
         }
       }
 
+      async function setBlockedSlot(date, time, shouldBlock) {
+        await api("/api/blocked-slots", {
+          method: shouldBlock ? "POST" : "DELETE",
+          body: JSON.stringify({ date, time }),
+        });
+        showToast(shouldBlock ? "时间段已占用。" : "占用已释放。");
+        state.selectedDate = date;
+        await refresh();
+      }
+
+      async function setBlockedSlots(rows, shouldBlock) {
+        const targets = rows.filter((row) => !row.booking && (shouldBlock ? !row.blocked : row.blocked));
+        if (!targets.length) {
+          showToast(shouldBlock ? "所选时间没有可占用项。" : "所选时间没有可释放项。");
+          return;
+        }
+        for (const row of targets) {
+          await api("/api/blocked-slots", {
+            method: shouldBlock ? "POST" : "DELETE",
+            body: JSON.stringify({ date: dateKey(row.date), time: row.time }),
+          });
+        }
+        showToast(shouldBlock ? `已占用 ${targets.length} 个时间段。` : `已释放 ${targets.length} 个时间段。`);
+        await refresh();
+      }
+
+      async function handleBlockAction(button) {
+        const date = button.dataset.blockDate;
+        const time = button.dataset.blockTime;
+        const shouldBlock = button.dataset.blockAction === "block";
+        try {
+          await setBlockedSlot(date, time, shouldBlock);
+        } catch (error) {
+          showToast(error.message);
+          await refresh();
+        }
+      }
+
+      async function handleBulkAction(action) {
+        try {
+          await setBlockedSlots(rowsForSelectedKeys(), action === "block");
+        } catch (error) {
+          showToast(error.message);
+          await refresh();
+        }
+      }
+
+      function selectVisibleSlots(predicate) {
+        rowsForSelectedDate().filter(predicate).forEach((row) => state.selectedSlotKeys.add(slotKey(row)));
+        renderCalendar();
+      }
+
       document.querySelector("#bookingWindow").addEventListener("click", setBookingWindow);
       document.querySelector("#refresh").addEventListener("click", refresh);
       document.querySelector("#previewButton").addEventListener("click", render);
+      document.querySelector("#selectAvailableSlots").addEventListener("click", () => {
+        selectVisibleSlots((row) => !row.booking && !row.blocked);
+      });
+      document.querySelector("#selectBlockedSlots").addEventListener("click", () => {
+        selectVisibleSlots((row) => !row.booking && row.blocked);
+      });
+      document.querySelector("#clearCalendarSelection").addEventListener("click", () => {
+        state.selectedSlotKeys.clear();
+        renderCalendar();
+      });
 
       loginForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -1050,6 +1233,7 @@
           await api("/api/admin/logout", { method: "POST" });
         } finally {
           state.bookings = [];
+          state.blockedSlots = [];
           showLogin();
         }
       });
@@ -1058,14 +1242,19 @@
         const tab = event.target.closest("[data-calendar-date]");
         if (!tab) return;
         state.selectedDate = tab.dataset.calendarDate;
-        state.selectedSlotKey = "";
+        state.selectedSlotKeys.clear();
         render();
       });
 
       calendarSlots.addEventListener("click", (event) => {
         const slot = event.target.closest("[data-slot-key]");
         if (!slot) return;
-        state.selectedSlotKey = slot.dataset.slotKey;
+        const key = slot.dataset.slotKey;
+        if (state.selectedSlotKeys.has(key)) {
+          state.selectedSlotKeys.delete(key);
+        } else {
+          state.selectedSlotKeys.add(key);
+        }
         renderCalendar();
       });
 
@@ -1075,6 +1264,11 @@
       });
 
       scheduleBody.addEventListener("click", async (event) => {
+        const blockButton = event.target.closest("[data-block-action]");
+        if (blockButton) {
+          await handleBlockAction(blockButton);
+          return;
+        }
         const button = event.target.closest("[data-delete]");
         if (!button) return;
         try {
@@ -1087,12 +1281,28 @@
       });
 
       slotDetail.addEventListener("click", async (event) => {
+        const clearButton = event.target.closest("[data-clear-selection]");
+        if (clearButton) {
+          state.selectedSlotKeys.clear();
+          renderCalendar();
+          return;
+        }
+        const bulkButton = event.target.closest("[data-bulk-action]");
+        if (bulkButton) {
+          await handleBulkAction(bulkButton.dataset.bulkAction);
+          return;
+        }
+        const blockButton = event.target.closest("[data-block-action]");
+        if (blockButton) {
+          await handleBlockAction(blockButton);
+          return;
+        }
         const button = event.target.closest("[data-delete]");
         if (!button) return;
         try {
           await api(`/api/bookings/${button.dataset.delete}`, { method: "DELETE" });
           showToast("预约已取消。");
-          state.selectedSlotKey = "";
+          state.selectedSlotKeys.clear();
           await refresh();
         } catch (error) {
           showToast(error.message);

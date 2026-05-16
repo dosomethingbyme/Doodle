@@ -626,7 +626,7 @@
                 stroke-linejoin="round"
               />
             </svg>
-            每个预约窗口 20 分钟
+            每个预约窗口 15 分钟
           </div>
         </header>
 
@@ -722,6 +722,8 @@
     <script>
       const WEEK_DAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
       const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
+      const SLOT_MINUTES = 15;
+      const VALID_TIMES = [...generateTimes(9, 12), ...generateTimes(13, 17)];
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", {
         year: "numeric",
@@ -784,7 +786,7 @@
 
       function generateTimes(startHour, endHour) {
         const result = [];
-        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += 20) {
+        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += SLOT_MINUTES) {
           const h = Math.floor(minutes / 60);
           const m = minutes % 60;
           result.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
@@ -794,7 +796,7 @@
 
       function endTime(start) {
         const [h, m] = start.split(":").map(Number);
-        const total = h * 60 + m + 20;
+        const total = h * 60 + m + SLOT_MINUTES;
         return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
       }
 
@@ -826,7 +828,7 @@
             const key = dateKey(date);
             const bookedCount = state.bookings.filter((booking) => booking.date === key).length;
             const label = `${MONTH_DAY.format(date)} ${WEEK_DAYS[date.getDay()]}`;
-            const status = bookedCount >= 18 ? "已满" : "可预约";
+            const status = bookedCount >= VALID_TIMES.length ? "已满" : "可预约";
             return `
               <button class="date-tab" type="button" role="tab" aria-selected="${key === state.selectedDate}" data-date="${key}">
                 <strong>${label}</strong>
@@ -840,7 +842,7 @@
       function renderSlots() {
         const groups = [
           { label: "上午", range: "09:00-12:00", times: generateTimes(9, 12) },
-          { label: "下午", range: "14:00-17:00", times: generateTimes(14, 17) },
+          { label: "下午", range: "13:00-17:00", times: generateTimes(13, 17) },
         ];
 
         slotGroups.innerHTML = groups
@@ -930,9 +932,9 @@
               <li class="record">
                 <span>
                   <strong>${FULL_DATE.format(toDate(booking.date))} ${booking.time} - ${endTime(booking.time)}</strong>
-                  该时间段已被预约
+                  该时间段不可预约
                 </span>
-                <span>已预约</span>
+                <span>已占用</span>
               </li>
             `
           )
