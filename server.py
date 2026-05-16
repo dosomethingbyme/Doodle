@@ -37,6 +37,7 @@ SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "0").lower() in ("1", "true", "y
 VERIFICATION_TTL_MINUTES = int(os.environ.get("VERIFICATION_TTL_MINUTES", "10"))
 VERIFICATION_RESEND_SECONDS = int(os.environ.get("VERIFICATION_RESEND_SECONDS", "60"))
 MAX_VERIFICATION_ATTEMPTS = 5
+TEST_LOCATION = "重庆大学A区校医院四楼阿尔兹海默症样机测试"
 
 
 def connect():
@@ -134,6 +135,19 @@ def parse_dt(value):
         return None
 
 
+def send_email_message(message):
+    if not SMTP_PASSWORD:
+        raise RuntimeError("邮箱服务器未配置 SMTP_PASSWORD")
+
+    smtp_class = smtplib.SMTP_SSL if SMTP_USE_SSL else smtplib.SMTP
+    with smtp_class(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+        if SMTP_STARTTLS and not SMTP_USE_SSL:
+            smtp.starttls()
+        if SMTP_USER:
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+        smtp.send_message(message)
+
+
 def send_verification_email(email, code):
     if not SMTP_PASSWORD:
         raise RuntimeError("邮箱服务器未配置 SMTP_PASSWORD")
@@ -154,14 +168,32 @@ def send_verification_email(email, code):
             ]
         )
     )
+    send_email_message(message)
 
-    smtp_class = smtplib.SMTP_SSL if SMTP_USE_SSL else smtplib.SMTP
-    with smtp_class(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-        if SMTP_STARTTLS and not SMTP_USE_SSL:
-            smtp.starttls()
-        if SMTP_USER:
-            smtp.login(SMTP_USER, SMTP_PASSWORD)
-        smtp.send_message(message)
+
+def send_booking_confirmation_email(booking):
+    message = EmailMessage()
+    message["Subject"] = "AIAD 样机测试预约成功"
+    message["From"] = SMTP_FROM
+    message["To"] = booking["email"]
+    message.set_content(
+        "\n".join(
+            [
+                f"{booking['name']}，您好：",
+                "",
+                "您的 AIAD 样机测试预约已成功。",
+                "",
+                f"预约日期：{booking['date']}",
+                f"预约时间：{booking['time']} - {add_minutes(booking['time'], 20)}",
+                f"测试地点：{TEST_LOCATION}",
+                "",
+                "如需调整预约，请联系工作人员。",
+                "",
+                "AIAD 预约系统",
+            ]
+        )
+    )
+    send_email_message(message)
 
 
 def verification_is_valid(conn, email):
@@ -574,7 +606,12 @@ class BookingHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "该时间已被其他人预约，请选择其他时间。"}, HTTPStatus.CONFLICT)
             return
 
-        self.send_json(row_to_dict(row), HTTPStatus.CREATED)
+        response = row_to_dict(row)
+        try:
+            send_booking_confirmation_email(response)
+        except Exception as exc:
+            response["emailWarning"] = f"预约已保存，但确认邮件发送失败：{exc}"
+        self.send_json(response, HTTPStatus.CREATED)
 
     def delete_booking(self, booking_id):
         if not booking_id.isdigit():

@@ -1072,7 +1072,7 @@
 
         confirmBooking.disabled = true;
         try {
-          await api("/api/bookings", {
+          const booking = await api("/api/bookings", {
             method: "POST",
             body: JSON.stringify({
               name: nameInput.value.trim(),
@@ -1081,7 +1081,7 @@
               time: state.selectedTime,
             }),
           });
-          showToast("预约成功，时间已在后台标记为已占用。");
+          showToast(booking.emailWarning || "预约成功，确认邮件已发送。");
           state.selectedTime = "";
           await refreshBookings();
         } catch (error) {
