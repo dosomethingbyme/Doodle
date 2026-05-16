@@ -670,10 +670,9 @@
           <button class="primary" id="confirmBooking" type="button" disabled>确认预约</button>
         </section>
 
-        <section class="panel records" aria-label="数据库预约记录">
+        <section class="panel records" aria-label="已占用时间">
           <div class="records-head">
-            <h2>数据库预约记录</h2>
-            <a class="text-button" href="/admin.html">进入后台</a>
+            <h2>已占用时间</h2>
           </div>
           <ul class="record-list" id="recordList"></ul>
         </section>
@@ -856,7 +855,7 @@
 
       function renderRecords() {
         if (state.bookings.length === 0) {
-          recordList.innerHTML = `<li class="record"><span>暂无预约记录</span></li>`;
+          recordList.innerHTML = `<li class="record"><span>暂无已占用时间</span></li>`;
           return;
         }
 
@@ -868,7 +867,7 @@
               <li class="record">
                 <span>
                   <strong>${FULL_DATE.format(toDate(booking.date))} ${booking.time} - ${endTime(booking.time)}</strong>
-                  ${booking.name} · ${booking.email}
+                  该时间段已被预约
                 </span>
                 <span>已预约</span>
               </li>
@@ -893,7 +892,7 @@
 
       async function refreshBookings() {
         try {
-          state.bookings = await api("/api/bookings");
+          state.bookings = await api("/api/availability");
           render();
         } catch (error) {
           showToast(`无法连接后台：${error.message}`);

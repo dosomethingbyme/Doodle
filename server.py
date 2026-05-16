@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import csv
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
+from http.cookies import SimpleCookie
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -17,6 +20,9 @@ VALID_TIMES = [
     *(f"{hour:02d}:{minute:02d}" for hour in range(14, 17) for minute in (0, 20, 40)),
 ]
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "aiad-admin-2026")
+ADMIN_SESSION_COOKIE = "aiad_admin_session"
+ADMIN_SESSION_TOKEN = secrets.token_urlsafe(32)
 
 
 def connect():
@@ -184,16 +190,33 @@ class BookingHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/admin/session":
+            self.admin_session()
+            return
+        if parsed.path == "/api/availability":
+            self.list_availability()
+            return
         if parsed.path == "/api/bookings":
+            if not self.require_admin():
+                return
             self.list_bookings()
             return
         if parsed.path == "/api/export.csv":
+            if not self.require_admin():
+                return
             self.export_csv(parse_qs(parsed.query))
             return
         super().do_GET()
 
     def do_POST(self):
-        if urlparse(self.path).path == "/api/bookings":
+        path = urlparse(self.path).path
+        if path == "/api/admin/login":
+            self.admin_login()
+            return
+        if path == "/api/admin/logout":
+            self.admin_logout()
+            return
+        if path == "/api/bookings":
             self.create_booking()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -201,6 +224,8 @@ class BookingHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         if path.startswith("/api/bookings/"):
+            if not self.require_admin():
+                return
             self.delete_booking(path.rsplit("/", 1)[-1])
             return
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -219,6 +244,69 @@ class BookingHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def is_admin_authenticated(self):
+        cookie_header = self.headers.get("Cookie")
+        if not cookie_header:
+            return False
+        cookie = SimpleCookie()
+        cookie.load(cookie_header)
+        morsel = cookie.get(ADMIN_SESSION_COOKIE)
+        return bool(morsel and hmac.compare_digest(morsel.value, ADMIN_SESSION_TOKEN))
+
+    def require_admin(self):
+        if self.is_admin_authenticated():
+            return True
+        self.send_json({"error": "请先登录后台"}, HTTPStatus.UNAUTHORIZED)
+        return False
+
+    def set_admin_cookie(self):
+        secure = " Secure;" if self.headers.get("X-Forwarded-Proto") == "https" else ""
+        self.send_header(
+            "Set-Cookie",
+            f"{ADMIN_SESSION_COOKIE}={ADMIN_SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800;{secure}",
+        )
+
+    def clear_admin_cookie(self):
+        self.send_header(
+            "Set-Cookie",
+            f"{ADMIN_SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        )
+
+    def admin_session(self):
+        self.send_json({"authenticated": self.is_admin_authenticated()})
+
+    def admin_login(self):
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
+            return
+        password = str(payload.get("password", ""))
+        if not hmac.compare_digest(password, ADMIN_PASSWORD):
+            self.send_json({"error": "后台密码错误"}, HTTPStatus.UNAUTHORIZED)
+            return
+        body = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.set_admin_cookie()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def admin_logout(self):
+        body = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.clear_admin_cookie()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def list_availability(self):
+        with connect() as conn:
+            rows = conn.execute("SELECT date, time FROM bookings ORDER BY date, time").fetchall()
+        self.send_json([{"date": row["date"], "time": row["time"]} for row in rows])
 
     def list_bookings(self):
         with connect() as conn:

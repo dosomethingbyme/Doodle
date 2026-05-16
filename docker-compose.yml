@@ -8,6 +8,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       BOOKING_DB_PATH: /data/bookings.sqlite3
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-aiad-admin-2026}
     volumes:
       - aiad-booking-data:/data
     restart: unless-stopped

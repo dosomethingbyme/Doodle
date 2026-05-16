@@ -51,6 +51,10 @@
         margin: 0 auto;
       }
 
+      [hidden] {
+        display: none !important;
+      }
+
       .topbar {
         display: flex;
         align-items: center;
@@ -109,6 +113,41 @@
         border-color: var(--teal);
         background: var(--teal);
         color: #fff;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .login-panel {
+        width: min(460px, 100%);
+        margin: 12vh auto 0;
+        padding: 30px;
+      }
+
+      .login-panel h1 {
+        margin-bottom: 10px;
+      }
+
+      .login-panel p {
+        margin: 0 0 24px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .login-panel .button {
+        width: 100%;
+        margin-top: 8px;
+      }
+
+      .login-error {
+        min-height: 22px;
+        margin-top: 12px;
+        color: var(--red);
+        font-size: 14px;
       }
 
       .filters {
@@ -474,6 +513,20 @@
   <body>
     <main class="app">
       <div class="shell">
+        <section class="panel login-panel" id="loginPanel" aria-label="后台登录">
+          <h1>后台登录</h1>
+          <p>请输入后台密码后查看预约名单、导出表格或取消预约。</p>
+          <form id="loginForm">
+            <div class="field">
+              <label for="adminPassword">后台密码</label>
+              <input id="adminPassword" type="password" autocomplete="current-password" required />
+            </div>
+            <button class="button primary" type="submit">进入后台</button>
+            <div class="login-error" id="loginError" role="alert"></div>
+          </form>
+        </section>
+
+        <div id="adminApp" hidden>
         <header class="topbar">
           <div class="brand">
             <div class="brand-mark" aria-hidden="true">
@@ -489,7 +542,10 @@
             </div>
             <h1>AIAD 预约后台</h1>
           </div>
-          <a class="button" href="/">返回预约页</a>
+          <div class="top-actions">
+            <button class="button" type="button" id="logoutButton">退出后台</button>
+            <a class="button" href="/">返回预约页</a>
+          </div>
         </header>
 
         <section class="panel filters" aria-label="预览筛选">
@@ -583,6 +639,7 @@
             </table>
           </div>
         </section>
+        </div>
       </div>
     </main>
 
@@ -594,6 +651,11 @@
       const VALID_TIMES = [...rangeTimes(9, 12), ...rangeTimes(14, 17)];
       const state = { bookings: [], previewRows: [], selectedDate: "", selectedSlotKey: "" };
 
+      const loginPanel = document.querySelector("#loginPanel");
+      const adminApp = document.querySelector("#adminApp");
+      const loginForm = document.querySelector("#loginForm");
+      const adminPassword = document.querySelector("#adminPassword");
+      const loginError = document.querySelector("#loginError");
       const startDateInput = document.querySelector("#startDate");
       const endDateInput = document.querySelector("#endDate");
       const timeFilter = document.querySelector("#timeFilter");
@@ -636,8 +698,38 @@
         const data = response.headers.get("content-type")?.includes("application/json")
           ? await response.json()
           : await response.text();
-        if (!response.ok) throw new Error(data.error || "请求失败");
+        if (!response.ok) {
+          if (response.status === 401) showLogin();
+          throw new Error(data.error || "请求失败");
+        }
         return data;
+      }
+
+      function showLogin(message = "") {
+        adminApp.hidden = true;
+        loginPanel.hidden = false;
+        loginError.textContent = message;
+        adminPassword.focus();
+      }
+
+      function showAdmin() {
+        loginPanel.hidden = true;
+        adminApp.hidden = false;
+      }
+
+      async function checkSession() {
+        try {
+          const session = await api("/api/admin/session");
+          if (session.authenticated) {
+            showAdmin();
+            setRange(0);
+            await refresh();
+          } else {
+            showLogin();
+          }
+        } catch (error) {
+          showLogin(error.message);
+        }
       }
 
       function dateKey(date) {
@@ -900,6 +992,32 @@
       document.querySelector("#refresh").addEventListener("click", refresh);
       document.querySelector("#previewButton").addEventListener("click", render);
 
+      loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        loginError.textContent = "";
+        try {
+          await api("/api/admin/login", {
+            method: "POST",
+            body: JSON.stringify({ password: adminPassword.value }),
+          });
+          adminPassword.value = "";
+          showAdmin();
+          setRange(0);
+          await refresh();
+        } catch (error) {
+          showLogin(error.message);
+        }
+      });
+
+      document.querySelector("#logoutButton").addEventListener("click", async () => {
+        try {
+          await api("/api/admin/logout", { method: "POST" });
+        } finally {
+          state.bookings = [];
+          showLogin();
+        }
+      });
+
       calendarDateTabs.addEventListener("click", (event) => {
         const tab = event.target.closest("[data-calendar-date]");
         if (!tab) return;
@@ -946,8 +1064,7 @@
       });
 
       fillTimeOptions();
-      setRange(0);
-      refresh();
+      checkSession();
     </script>
   </body>
 </html>

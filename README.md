@@ -9,6 +9,8 @@
 - 每个时间段 20 分钟，最后可选开始时间为 `11:40` 和 `16:40`。
 - SQLite 数据库存储预约记录。
 - 数据库唯一约束防止同一日期同一时间段被重复预约。
+- 前台不显示后台入口，也不会公开预约人的姓名和邮箱。
+- 后台需要密码登录，默认密码为 `aiad-admin-2026`，可用 `ADMIN_PASSWORD` 修改。
 - 后台日历式预览：按日期查看每个时间段的预约人。
 - 后台表格预览：按日期范围、时间段、状态、姓名或邮箱筛选。
 - 后台支持取消预约。
@@ -19,7 +21,7 @@
 
 - 预约页：`http://127.0.0.1:8000/`
 - 后台页：`http://127.0.0.1:8000/admin.html`
-- 导出接口：`http://127.0.0.1:8000/api/export.csv`
+- 导出接口：`http://127.0.0.1:8000/api/export.csv`（需要后台登录）
 
 ## 本地运行
 
@@ -43,10 +45,22 @@ bookings.sqlite3
 
 这些本地数据库文件已加入 `.gitignore`，不会提交到仓库。
 
+如果要修改后台密码：
+
+```bash
+ADMIN_PASSWORD='your-strong-password' python3 server.py
+```
+
 ## Docker 运行
 
 ```bash
 docker compose up --build
+```
+
+如需修改后台密码：
+
+```bash
+ADMIN_PASSWORD='your-strong-password' docker compose up --build
 ```
 
 启动后打开：
@@ -83,6 +97,12 @@ docker compose down -v
 http://127.0.0.1:8000/admin.html
 ```
 
+默认后台密码：
+
+```text
+aiad-admin-2026
+```
+
 后台支持：
 
 - 选择开始日期和结束日期。
@@ -95,11 +115,34 @@ http://127.0.0.1:8000/admin.html
 
 ## API
 
-### 获取预约
+### 获取占用时间
+
+```http
+GET /api/availability
+```
+
+前台使用这个接口只获取已占用的 `date` 和 `time`，不会返回姓名或邮箱。
+
+### 后台登录
+
+```http
+POST /api/admin/login
+Content-Type: application/json
+
+{
+  "password": "aiad-admin-2026"
+}
+```
+
+登录成功后浏览器会保存 HttpOnly Cookie，用于访问后台接口。
+
+### 获取预约名单
 
 ```http
 GET /api/bookings
 ```
+
+需要后台登录。
 
 ### 创建预约
 
@@ -123,11 +166,15 @@ Content-Type: application/json
 DELETE /api/bookings/{id}
 ```
 
+需要后台登录。
+
 ### 导出 CSV
 
 ```http
 GET /api/export.csv?startDate=2026-05-19&endDate=2026-05-21&time=all&status=all
 ```
+
+需要后台登录。
 
 可用查询参数：
 
@@ -146,6 +193,7 @@ CSV 使用 UTF-8 BOM，方便用 Excel 打开中文内容。
 | `HOST` | `127.0.0.1` | 服务监听地址 |
 | `PORT` | `8000` | 服务端口 |
 | `BOOKING_DB_PATH` | `./bookings.sqlite3` | SQLite 数据库路径 |
+| `ADMIN_PASSWORD` | `aiad-admin-2026` | 后台登录密码 |
 
 Dockerfile 中默认：
 
@@ -153,6 +201,7 @@ Dockerfile 中默认：
 HOST=0.0.0.0
 PORT=8000
 BOOKING_DB_PATH=/data/bookings.sqlite3
+ADMIN_PASSWORD=aiad-admin-2026
 ```
 
 ## 测试
@@ -172,3 +221,13 @@ curl -s -H 'Content-Type: application/json' \
 ```
 
 重复提交同一 `date + time` 应返回冲突错误。
+
+后台接口测试示例：
+
+```bash
+curl -c /tmp/aiad-cookie.txt -s -H 'Content-Type: application/json' \
+  -d '{"password":"aiad-admin-2026"}' \
+  http://127.0.0.1:8000/api/admin/login
+
+curl -b /tmp/aiad-cookie.txt -s http://127.0.0.1:8000/api/bookings
+```
