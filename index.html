@@ -671,18 +671,6 @@
           <section class="panel planner" aria-labelledby="timeTitle">
             <div class="planner-head">
               <h2 class="section-title" id="timeTitle">选择时间</h2>
-              <div class="week-controls" aria-label="切换周">
-                <button class="icon-button" type="button" id="prevWeek" aria-label="上一周">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="m15 18-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </button>
-                <button class="icon-button" type="button" id="nextWeek" aria-label="下一周">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="m9 18 6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </button>
-              </div>
             </div>
 
             <div class="date-tabs" id="dateTabs" role="tablist" aria-label="可预约日期"></div>
@@ -733,6 +721,7 @@
 
     <script>
       const WEEK_DAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+      const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", {
         year: "numeric",
@@ -742,7 +731,6 @@
       });
 
       const state = {
-        weekOffset: 0,
         selectedDate: "",
         selectedTime: "",
         bookings: [],
@@ -760,8 +748,6 @@
       const verificationStatus = document.querySelector("#verificationStatus");
       const dateTabs = document.querySelector("#dateTabs");
       const slotGroups = document.querySelector("#slotGroups");
-      const prevWeek = document.querySelector("#prevWeek");
-      const nextWeek = document.querySelector("#nextWeek");
       const confirmBooking = document.querySelector("#confirmBooking");
       const recordList = document.querySelector("#recordList");
       const toast = document.querySelector("#toast");
@@ -791,18 +777,8 @@
         return new Date(year, month - 1, day);
       }
 
-      function getWeekDates(offset) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const day = today.getDay();
-        const daysToWednesday = (3 - day + 7) % 7;
-        const firstWednesday = new Date(today);
-        firstWednesday.setDate(today.getDate() + daysToWednesday + offset * 7);
-        return [0, 1, 2].map((add) => {
-          const date = new Date(firstWednesday);
-          date.setDate(firstWednesday.getDate() + add);
-          return date;
-        });
+      function getBookingDates() {
+        return BOOKING_DATE_KEYS.map(toDate);
       }
 
       function generateTimes(startHour, endHour) {
@@ -834,13 +810,12 @@
       }
 
       function renderDates() {
-        const dates = getWeekDates(state.weekOffset);
+        const dates = getBookingDates();
         if (!state.selectedDate || !dates.some((date) => dateKey(date) === state.selectedDate)) {
           state.selectedDate = dateKey(dates[0]);
           state.selectedTime = "";
         }
 
-        prevWeek.disabled = state.weekOffset === 0;
         dateTabs.innerHTML = dates
           .map((date) => {
             const key = dateKey(date);
@@ -991,18 +966,6 @@
         const slot = event.target.closest("[data-time]");
         if (!slot || slot.disabled) return;
         state.selectedTime = slot.dataset.time;
-        render();
-      });
-
-      prevWeek.addEventListener("click", () => {
-        state.weekOffset = Math.max(0, state.weekOffset - 1);
-        state.selectedTime = "";
-        render();
-      });
-
-      nextWeek.addEventListener("click", () => {
-        state.weekOffset += 1;
-        state.selectedTime = "";
         render();
       });
 

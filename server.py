@@ -21,6 +21,8 @@ VALID_TIMES = [
     *(f"{hour:02d}:{minute:02d}" for hour in range(9, 12) for minute in (0, 20, 40)),
     *(f"{hour:02d}:{minute:02d}" for hour in range(14, 17) for minute in (0, 20, 40)),
 ]
+BOOKING_START_DATE = date(2026, 5, 20)
+BOOKING_END_DATE = date(2026, 5, 22)
 VALID_WEEKDAYS = (2, 3, 4)
 WEEKDAY_LABEL = "周三、周四、周五"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -114,6 +116,8 @@ def validate_booking(payload):
         return None, "请输入有效邮箱"
     if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
         return None, f"只能预约{WEEKDAY_LABEL}"
+    if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
+        return None, "只能预约 2026-05-20 至 2026-05-22 的时间段"
     if booking_time not in VALID_TIMES:
         return None, "请选择有效的 20 分钟时间窗"
 
@@ -211,28 +215,24 @@ def verification_is_valid(conn, email):
     return bool(expires_at and expires_at >= datetime.now())
 
 
-def first_bookable_day(offset):
-    today = date.today()
-    days_to_wednesday = (2 - today.weekday()) % 7
-    return today + timedelta(days=days_to_wednesday + offset * 7)
-
-
-def week_dates(offset):
-    start = first_bookable_day(offset)
-    return [start + timedelta(days=i) for i in range(3)]
+def booking_dates():
+    current = BOOKING_START_DATE
+    dates = []
+    while current <= BOOKING_END_DATE:
+        dates.append(current)
+        current += timedelta(days=1)
+    return dates
 
 
 def query_dates(query):
     start = parse_date(query.get("startDate", [""])[0])
     end = parse_date(query.get("endDate", [""])[0])
     if not start or not end:
-        try:
-            offset = int(query.get("weekOffset", ["0"])[0] or 0)
-        except ValueError:
-            offset = 0
-        return week_dates(offset)
+        return booking_dates()
     if end < start:
         start, end = end, start
+    start = max(start, BOOKING_START_DATE)
+    end = min(end, BOOKING_END_DATE)
     if (end - start).days > 62:
         end = start + timedelta(days=62)
     days = []
@@ -433,7 +433,15 @@ class BookingHandler(SimpleHTTPRequestHandler):
 
     def list_availability(self):
         with connect() as conn:
-            rows = conn.execute("SELECT date, time FROM bookings ORDER BY date, time").fetchall()
+            rows = conn.execute(
+                """
+                SELECT date, time
+                FROM bookings
+                WHERE date BETWEEN ? AND ?
+                ORDER BY date, time
+                """,
+                (BOOKING_START_DATE.isoformat(), BOOKING_END_DATE.isoformat()),
+            ).fetchall()
         self.send_json([{"date": row["date"], "time": row["time"]} for row in rows])
 
     def list_bookings(self):

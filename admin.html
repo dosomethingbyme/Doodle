@@ -625,10 +625,8 @@
           </div>
         </section>
 
-        <div class="quick-actions" aria-label="快捷日期">
-          <button class="button" type="button" id="thisWeek">本周三至周五</button>
-          <button class="button" type="button" id="nextWeek">下周三至周五</button>
-          <button class="button" type="button" id="todayOnly">今天</button>
+        <div class="quick-actions" aria-label="预约日期">
+          <button class="button" type="button" id="bookingWindow">预约日期：5月20日至5月22日</button>
           <button class="button" type="button" id="refresh">刷新数据库</button>
         </div>
 
@@ -660,10 +658,6 @@
             <div class="admin-legend" aria-label="时间状态说明">
               <span><span class="legend-swatch"></span>可预约</span>
               <span><span class="legend-swatch booked"></span>已预约</span>
-            </div>
-            <div class="calendar-week-actions" aria-label="切换日历周">
-              <button class="button" type="button" id="calendarPrevWeek">上一周</button>
-              <button class="button" type="button" id="calendarNextWeek">下一周</button>
             </div>
           </div>
           <div class="date-tabs" id="calendarDateTabs" role="tablist" aria-label="预览日期"></div>
@@ -704,8 +698,9 @@
     <script>
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", weekday: "short" });
+      const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
       const VALID_TIMES = [...rangeTimes(9, 12), ...rangeTimes(14, 17)];
-      const state = { bookings: [], previewRows: [], selectedDate: "", selectedSlotKey: "", weekOffset: 0 };
+      const state = { bookings: [], previewRows: [], selectedDate: "", selectedSlotKey: "" };
 
       const loginPanel = document.querySelector("#loginPanel");
       const adminApp = document.querySelector("#adminApp");
@@ -723,8 +718,6 @@
       const calendarDateTabs = document.querySelector("#calendarDateTabs");
       const calendarSlots = document.querySelector("#calendarSlots");
       const slotDetail = document.querySelector("#slotDetail");
-      const calendarPrevWeek = document.querySelector("#calendarPrevWeek");
-      const calendarNextWeek = document.querySelector("#calendarNextWeek");
       const exportLink = document.querySelector("#exportLink");
       const toast = document.querySelector("#toast");
 
@@ -780,7 +773,7 @@
           const session = await api("/api/admin/session");
           if (session.authenticated) {
             showAdmin();
-            setRange(0);
+            setBookingWindow();
             await refresh();
           } else {
             showLogin();
@@ -799,17 +792,8 @@
         return new Date(year, month - 1, day);
       }
 
-      function getWeekDates(offset = 0) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const daysToWednesday = (3 - today.getDay() + 7) % 7;
-        const firstWednesday = new Date(today);
-        firstWednesday.setDate(today.getDate() + daysToWednesday + offset * 7);
-        return [0, 1, 2].map((add) => {
-          const item = new Date(firstWednesday);
-          item.setDate(firstWednesday.getDate() + add);
-          return item;
-        });
+      function getBookingDates() {
+        return BOOKING_DATE_KEYS.map(toDate);
       }
 
       function selectedDates() {
@@ -818,13 +802,7 @@
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
         const first = start <= end ? start : end;
         const last = start <= end ? end : start;
-        const result = [];
-        const current = new Date(first);
-        while (current <= last) {
-          if ([3, 4, 5].includes(current.getDay())) result.push(new Date(current));
-          current.setDate(current.getDate() + 1);
-        }
-        return result;
+        return getBookingDates().filter((date) => date >= first && date <= last);
       }
 
       function selectedTimes() {
@@ -875,7 +853,6 @@
         document.querySelector("#bookedSlots").textContent = booked;
         document.querySelector("#availableSlots").textContent = total - booked;
         document.querySelector("#allBookings").textContent = state.bookings.length;
-        calendarPrevWeek.disabled = state.weekOffset <= 0;
         previewInfo.textContent = `${startDateInput.value || "-"} 至 ${endDateInput.value || "-"}，共 ${total} 个预览时间段`;
         exportLink.href = `/api/export.csv?${exportParams().toString()}`;
         renderCalendar();
@@ -1006,19 +983,19 @@
         return params;
       }
 
-      function setRange(offset) {
-        state.weekOffset = Math.max(0, offset);
-        const dates = getWeekDates(offset);
+      function setBookingWindow() {
+        const dates = getBookingDates();
         startDateInput.value = dateKey(dates[0]);
         endDateInput.value = dateKey(dates[2]);
+        startDateInput.min = BOOKING_DATE_KEYS[0];
+        startDateInput.max = BOOKING_DATE_KEYS[2];
+        endDateInput.min = BOOKING_DATE_KEYS[0];
+        endDateInput.max = BOOKING_DATE_KEYS[2];
         render();
       }
 
       function setToday() {
-        const today = new Date();
-        startDateInput.value = dateKey(today);
-        endDateInput.value = dateKey(today);
-        render();
+        setBookingWindow();
       }
 
       function escapeHtml(value) {
@@ -1047,13 +1024,9 @@
         }
       }
 
-      document.querySelector("#thisWeek").addEventListener("click", () => setRange(0));
-      document.querySelector("#nextWeek").addEventListener("click", () => setRange(1));
-      document.querySelector("#todayOnly").addEventListener("click", setToday);
+      document.querySelector("#bookingWindow").addEventListener("click", setBookingWindow);
       document.querySelector("#refresh").addEventListener("click", refresh);
       document.querySelector("#previewButton").addEventListener("click", render);
-      calendarPrevWeek.addEventListener("click", () => setRange(state.weekOffset - 1));
-      calendarNextWeek.addEventListener("click", () => setRange(state.weekOffset + 1));
 
       loginForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -1065,7 +1038,7 @@
           });
           adminPassword.value = "";
           showAdmin();
-          setRange(0);
+          setBookingWindow();
           await refresh();
         } catch (error) {
           showLogin(error.message);

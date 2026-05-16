@@ -5,7 +5,7 @@
 ## 功能
 
 - 前台预约页：姓名、邮箱、邮箱验证码、日期、20 分钟时间段选择。
-- 可预约时间：周三、周四、周五，上午 `09:00-12:00`，下午 `14:00-17:00`。
+- 可预约日期：`2026-05-20` 至 `2026-05-22`，每天上午 `09:00-12:00`，下午 `14:00-17:00`。
 - 每个时间段 20 分钟，最后可选开始时间为 `11:40` 和 `16:40`。
 - SQLite 数据库存储预约记录。
 - 数据库唯一约束防止同一日期同一时间段被重复预约。
@@ -201,7 +201,7 @@ Content-Type: application/json
 {
   "name": "张三",
   "email": "zhangsan@example.com",
-  "date": "2026-05-19",
+  "date": "2026-05-20",
   "time": "09:00"
 }
 ```
@@ -225,7 +225,7 @@ DELETE /api/bookings/{id}
 ### 导出 CSV
 
 ```http
-GET /api/export.csv?startDate=2026-05-19&endDate=2026-05-21&time=all&status=all
+GET /api/export.csv?startDate=2026-05-20&endDate=2026-05-22&time=all&status=all
 ```
 
 需要后台登录。
