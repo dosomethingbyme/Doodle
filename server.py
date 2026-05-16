@@ -79,10 +79,14 @@ def init_db():
             )
             """
         )
-        try:
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_email_unique ON bookings(lower(email))")
-        except sqlite3.IntegrityError:
-            pass
+        conn.execute("DROP INDEX IF EXISTS idx_bookings_email_unique")
+        conn.execute(
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_email_window_unique
+            ON bookings(lower(email))
+            WHERE date BETWEEN '{BOOKING_START_DATE.isoformat()}' AND '{BOOKING_END_DATE.isoformat()}'
+            """
+        )
 
 
 def row_to_dict(row):
@@ -213,6 +217,20 @@ def verification_is_valid(conn, email):
         return False
     expires_at = parse_dt(row["expires_at"])
     return bool(expires_at and expires_at >= datetime.now())
+
+
+def find_current_window_booking(conn, email):
+    return conn.execute(
+        """
+        SELECT date, time
+        FROM bookings
+        WHERE lower(email) = lower(?)
+          AND date BETWEEN ? AND ?
+        ORDER BY date, time
+        LIMIT 1
+        """,
+        (email, BOOKING_START_DATE.isoformat(), BOOKING_END_DATE.isoformat()),
+    ).fetchone()
 
 
 def booking_dates():
@@ -465,10 +483,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
 
         now = datetime.now()
         with connect() as conn:
-            existing_booking = conn.execute(
-                "SELECT date, time FROM bookings WHERE lower(email) = lower(?)",
-                (email,),
-            ).fetchone()
+            existing_booking = find_current_window_booking(conn, email)
             if existing_booking:
                 self.send_json(
                     {
@@ -577,10 +592,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
         try:
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                existing_booking = conn.execute(
-                    "SELECT date, time FROM bookings WHERE lower(email) = lower(?)",
-                    (booking["email"],),
-                ).fetchone()
+                existing_booking = find_current_window_booking(conn, booking["email"])
                 if existing_booking:
                     self.send_json(
                         {
