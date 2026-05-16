@@ -735,6 +735,7 @@
         selectedTime: "",
         bookings: [],
         verifiedEmail: "",
+        currentBooking: null,
         verificationMessage: "请先发送验证码并完成邮箱验证。",
         sendingCode: false,
         verifyingCode: false,
@@ -809,6 +810,10 @@
         return Boolean(state.verifiedEmail && state.verifiedEmail === normalizedEmail());
       }
 
+      function isUpdateMode() {
+        return Boolean(emailIsVerified() && state.currentBooking);
+      }
+
       function renderDates() {
         const dates = getBookingDates();
         if (!state.selectedDate || !dates.some((date) => dateKey(date) === state.selectedDate)) {
@@ -873,18 +878,20 @@
         const name = nameInput.value.trim();
         const email = normalizedEmail();
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        const updating = isUpdateMode();
 
-        document.querySelector("#nameError").textContent = name ? "" : "请输入姓名";
+        document.querySelector("#nameError").textContent = name || updating ? "" : "请输入姓名";
         document.querySelector("#emailError").textContent = email ? (emailOk ? "" : "请输入有效邮箱") : "请输入邮箱";
 
         sendCodeButton.disabled = !emailOk || state.sendingCode;
         verifyCodeButton.disabled = !emailOk || !emailCodeInput.value.trim() || state.verifyingCode || emailIsVerified();
         verificationStatus.classList.toggle("ok", emailIsVerified());
         verificationStatus.textContent = emailIsVerified()
-          ? "邮箱验证已通过。"
+          ? state.verificationMessage
           : state.verificationMessage;
 
-        const valid = Boolean(name && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
+        confirmBooking.textContent = updating ? "修改预约" : "确认预约";
+        const valid = Boolean((name || updating) && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
         confirmBooking.disabled = !valid;
         return valid;
       }
@@ -903,6 +910,7 @@
 
       function resetVerification() {
         state.verifiedEmail = "";
+        state.currentBooking = null;
         state.verificationMessage = "请先发送验证码并完成邮箱验证。";
         emailCodeInput.value = "";
         renderSummary();
@@ -1007,15 +1015,25 @@
         state.verifyingCode = true;
         validateForm();
         try {
-          await api("/api/verification/verify", {
+          const result = await api("/api/verification/verify", {
             method: "POST",
             body: JSON.stringify({ email, code }),
           });
           state.verifiedEmail = email;
-          state.verificationMessage = "邮箱验证已通过。";
-          showToast("邮箱验证通过。");
+          state.currentBooking = result.currentBooking || null;
+          if (state.currentBooking) {
+            state.selectedDate = state.currentBooking.date;
+            state.selectedTime = "";
+            state.verificationMessage = `邮箱验证已通过。当前预约为 ${state.currentBooking.date} ${state.currentBooking.time} - ${endTime(state.currentBooking.time)}，请选择新的时间段。`;
+            showToast("邮箱验证通过，可以修改预约时间。");
+            render();
+          } else {
+            state.verificationMessage = "邮箱验证已通过。";
+            showToast("邮箱验证通过。");
+          }
         } catch (error) {
           state.verifiedEmail = "";
+          state.currentBooking = null;
           state.verificationMessage = error.message;
           showToast(error.message);
         } finally {
@@ -1035,17 +1053,23 @@
 
         confirmBooking.disabled = true;
         try {
-          const booking = await api("/api/bookings", {
-            method: "POST",
-            body: JSON.stringify({
-              name: nameInput.value.trim(),
-              email: normalizedEmail(),
-              date: state.selectedDate,
-              time: state.selectedTime,
-            }),
+          const payload = {
+            name: nameInput.value.trim(),
+            email: normalizedEmail(),
+            date: state.selectedDate,
+            time: state.selectedTime,
+          };
+          const updating = isUpdateMode();
+          const booking = await api(updating ? "/api/bookings/by-email" : "/api/bookings", {
+            method: updating ? "PUT" : "POST",
+            body: JSON.stringify(payload),
           });
-          showToast(booking.emailWarning || "预约成功，确认邮件已发送。");
+          showToast(booking.emailWarning || (updating ? "预约时间已修改，通知邮件已发送。" : "预约成功，确认邮件已发送。"));
           state.selectedTime = "";
+          state.verifiedEmail = "";
+          state.currentBooking = null;
+          state.verificationMessage = "请先发送验证码并完成邮箱验证。";
+          emailCodeInput.value = "";
           await refreshBookings();
         } catch (error) {
           showToast(error.message);

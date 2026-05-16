@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+.env
+.env.*
+!.env.example
 bookings.sqlite3
 bookings.sqlite3-shm
 bookings.sqlite3-wal
