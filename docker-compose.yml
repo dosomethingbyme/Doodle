@@ -1,0 +1,16 @@
+services:
+  aiad-booking:
+    build: .
+    container_name: aiad-booking
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      BOOKING_DB_PATH: /data/bookings.sqlite3
+    volumes:
+      - aiad-booking-data:/data
+    restart: unless-stopped
+
+volumes:
+  aiad-booking-data:

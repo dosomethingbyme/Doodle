@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+bookings.sqlite3
+bookings.sqlite3-shm
+bookings.sqlite3-wal
