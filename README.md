@@ -55,28 +55,19 @@ bookings.sqlite3
 ADMIN_PASSWORD='your-strong-password' python3 server.py
 ```
 
-邮箱验证码需要配置 SMTP 授权码：
-
-```bash
-SMTP_PASSWORD='your-smtp-authorization-code' python3 server.py
-```
-
-也可以在项目根目录创建本地 `.env` 文件：
-
-```text
-SMTP_PASSWORD=your-smtp-authorization-code
-```
-
-`.env` 已加入 `.gitignore`，不会提交到仓库。
-
-默认 SMTP 服务器为 163 邮箱：
+邮箱验证码需要在项目根目录创建本地 `.env` 文件：
 
 ```text
 SMTP_HOST=your-smtp-host
 SMTP_PORT=465
 SMTP_USER=your-smtp-login
+SMTP_PASSWORD=your-smtp-authorization-code
+SMTP_FROM=your-sender-address
 SMTP_USE_SSL=1
+SMTP_STARTTLS=0
 ```
+
+`.env` 已加入 `.gitignore`，不会提交到仓库。
 
 ## Docker 运行
 
@@ -90,10 +81,10 @@ docker compose up --build
 ADMIN_PASSWORD='your-strong-password' docker compose up --build
 ```
 
-如需启用邮箱验证码发送：
+如需启用邮箱验证码发送，请先在 `.env` 中配置完整 SMTP 环境变量，再启动：
 
 ```bash
-SMTP_PASSWORD='your-smtp-authorization-code' docker compose up --build
+docker compose up --build
 ```
 
 启动后打开：
@@ -333,15 +324,14 @@ CSV 使用 UTF-8 BOM，方便用 Excel 打开中文内容。
 | `PORT` | `8000` | 服务端口 |
 | `BOOKING_DB_PATH` | `./bookings.sqlite3` | SQLite 数据库路径 |
 | `ADMIN_PASSWORD` | `aiad-admin-2026` | 后台登录密码 |
-| `SMTP_HOST` | `your-smtp-host` | SMTP 服务器 |
-| `SMTP_PORT` | `465` | SMTP 端口 |
-| `SMTP_USER` | `your-smtp-login` | SMTP 登录账号 |
-| `SMTP_PASSWORD` | 空 | SMTP 授权码；不建议写入代码或提交到仓库 |
-| `SMTP_FROM` | `SMTP_USER` | 发件人地址 |
+| `SMTP_HOST` | 空 | SMTP 服务器；发送验证码时必填 |
+| `SMTP_PORT` | 空 | SMTP 端口；发送验证码时必填 |
+| `SMTP_USER` | 空 | SMTP 登录账号；发送验证码时必填 |
+| `SMTP_PASSWORD` | 空 | SMTP 授权码；发送验证码时必填，不建议写入代码或提交到仓库 |
+| `SMTP_FROM` | `SMTP_USER` | 发件人地址；发送验证码时必填 |
 | `SMTP_USE_SSL` | `1` | 是否使用 SSL 连接 |
 | `SMTP_STARTTLS` | `0` | 非 SSL 模式下是否启用 STARTTLS |
 | `VERIFICATION_TTL_MINUTES` | `10` | 验证码有效分钟数 |
-| `VERIFICATION_RESEND_SECONDS` | `60` | 同一邮箱重新发送验证码的等待秒数 |
 | `EMAIL_SESSION_TTL_HOURS` | `12` | 邮箱验证通过后，本次页面会话 token 的有效小时数 |
 
 Dockerfile 中默认：
@@ -351,10 +341,6 @@ HOST=0.0.0.0
 PORT=8000
 BOOKING_DB_PATH=/data/bookings.sqlite3
 ADMIN_PASSWORD=aiad-admin-2026
-SMTP_HOST=your-smtp-host
-SMTP_PORT=465
-SMTP_USER=your-smtp-login
-SMTP_USE_SSL=1
 ```
 
 ## 测试

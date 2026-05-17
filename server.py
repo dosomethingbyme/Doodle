@@ -48,15 +48,14 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "aiad-admin-2026")
 ADMIN_SESSION_COOKIE = "aiad_admin_session"
 ADMIN_SESSION_TOKEN = secrets.token_urlsafe(32)
-SMTP_HOST = os.environ.get("SMTP_HOST", "your-smtp-host")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("SMTP_USER", "your-smtp-login")
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "0") or "0")
+SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER)
 SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "1").lower() not in ("0", "false", "no")
 SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "0").lower() in ("1", "true", "yes")
 VERIFICATION_TTL_MINUTES = int(os.environ.get("VERIFICATION_TTL_MINUTES", "10"))
-VERIFICATION_RESEND_SECONDS = int(os.environ.get("VERIFICATION_RESEND_SECONDS", "60"))
 EMAIL_SESSION_TTL_HOURS = int(os.environ.get("EMAIL_SESSION_TTL_HOURS", "12"))
 MAX_VERIFICATION_ATTEMPTS = 5
 TEST_LOCATION = "重庆大学A区校医院四楼阿尔兹海默症样机测试"
@@ -228,8 +227,19 @@ def parse_dt(value):
 
 
 def send_email_message(message):
-    if not SMTP_PASSWORD:
-        raise RuntimeError("邮箱服务器未配置 SMTP_PASSWORD")
+    missing = [
+        name
+        for name, value in (
+            ("SMTP_HOST", SMTP_HOST),
+            ("SMTP_PORT", SMTP_PORT),
+            ("SMTP_USER", SMTP_USER),
+            ("SMTP_PASSWORD", SMTP_PASSWORD),
+            ("SMTP_FROM", SMTP_FROM),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"邮箱服务器未配置 {', '.join(missing)}")
 
     smtp_class = smtplib.SMTP_SSL if SMTP_USE_SSL else smtplib.SMTP
     with smtp_class(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
@@ -714,17 +724,6 @@ class BookingHandler(SimpleHTTPRequestHandler):
             return
 
         now = datetime.now()
-        with connect() as conn:
-            row = conn.execute(
-                "SELECT sent_at FROM email_verifications WHERE lower(email) = lower(?)",
-                (email,),
-            ).fetchone()
-            sent_at = parse_dt(row["sent_at"]) if row else None
-            if sent_at and (now - sent_at).total_seconds() < VERIFICATION_RESEND_SECONDS:
-                remaining = int(VERIFICATION_RESEND_SECONDS - (now - sent_at).total_seconds())
-                self.send_json({"error": f"验证码已发送，请 {remaining} 秒后再试。"}, HTTPStatus.TOO_MANY_REQUESTS)
-                return
-
         code = f"{secrets.randbelow(1_000_000):06d}"
         try:
             send_verification_email(email, code)

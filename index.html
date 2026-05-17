@@ -743,6 +743,7 @@
       const WEEK_DAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
       const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
       const SLOT_MINUTES = 15;
+      const VERIFICATION_RESEND_SECONDS = 60;
       const VALID_TIMES = [...generateTimes(9, 12), ...generateTimes(13, 17)];
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", {
@@ -762,6 +763,7 @@
         currentBooking: null,
         verificationMessage: "请先发送验证码并完成邮箱验证。",
         sendingCode: false,
+        resendRemaining: 0,
         verifyingCode: false,
       };
 
@@ -778,6 +780,7 @@
       const cancelBooking = document.querySelector("#cancelBooking");
       const recordList = document.querySelector("#recordList");
       const toast = document.querySelector("#toast");
+      let resendTimer = 0;
 
       async function api(path, options = {}) {
         const response = await fetch(path, {
@@ -911,7 +914,14 @@
         document.querySelector("#mentorError").textContent = mentor || updating ? "" : "请输入导师";
         document.querySelector("#emailError").textContent = email ? (emailOk ? "" : "请输入有效邮箱") : "请输入邮箱";
 
-        sendCodeButton.disabled = !emailOk || state.sendingCode || emailIsVerified();
+        sendCodeButton.disabled = !emailOk || state.sendingCode || emailIsVerified() || state.resendRemaining > 0;
+        if (emailIsVerified()) {
+          sendCodeButton.textContent = "已验证";
+        } else if (state.resendRemaining > 0) {
+          sendCodeButton.textContent = `重新发送 (${state.resendRemaining}s)`;
+        } else {
+          sendCodeButton.textContent = state.sendingCode ? "发送中..." : "发送验证码";
+        }
         verifyCodeButton.disabled = !emailOk || !emailCodeInput.value.trim() || state.verifyingCode || emailIsVerified();
         verificationStatus.classList.toggle("ok", emailIsVerified());
         verificationStatus.textContent = emailIsVerified()
@@ -940,6 +950,7 @@
       }
 
       function resetVerification() {
+        stopResendCooldown();
         state.verifiedEmail = "";
         state.verificationToken = "";
         state.verificationExpiresAt = "";
@@ -947,6 +958,28 @@
         state.verificationMessage = "请先发送验证码并完成邮箱验证。";
         emailCodeInput.value = "";
         renderSummary();
+      }
+
+      function stopResendCooldown() {
+        if (resendTimer) {
+          window.clearInterval(resendTimer);
+          resendTimer = 0;
+        }
+        state.resendRemaining = 0;
+      }
+
+      function startResendCooldown(seconds = VERIFICATION_RESEND_SECONDS) {
+        if (resendTimer) window.clearInterval(resendTimer);
+        state.resendRemaining = Math.max(1, Number(seconds) || VERIFICATION_RESEND_SECONDS);
+        validateForm();
+        resendTimer = window.setInterval(() => {
+          state.resendRemaining = Math.max(0, state.resendRemaining - 1);
+          if (state.resendRemaining === 0) {
+            window.clearInterval(resendTimer);
+            resendTimer = 0;
+          }
+          validateForm();
+        }, 1000);
       }
 
       function renderRecords() {
@@ -1031,6 +1064,7 @@
             method: "POST",
             body: JSON.stringify({ email }),
           });
+          startResendCooldown();
           state.verificationMessage = "验证码已发送，请检查邮箱。";
           showToast("验证码已发送。");
         } catch (error) {
