@@ -57,6 +57,7 @@ SMTP_USE_SSL = os.environ.get("SMTP_USE_SSL", "1").lower() not in ("0", "false",
 SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "0").lower() in ("1", "true", "yes")
 VERIFICATION_TTL_MINUTES = int(os.environ.get("VERIFICATION_TTL_MINUTES", "10"))
 VERIFICATION_RESEND_SECONDS = int(os.environ.get("VERIFICATION_RESEND_SECONDS", "60"))
+EMAIL_SESSION_TTL_HOURS = int(os.environ.get("EMAIL_SESSION_TTL_HOURS", "12"))
 MAX_VERIFICATION_ATTEMPTS = 5
 TEST_LOCATION = "重庆大学A区校医院四楼阿尔兹海默症样机测试"
 
@@ -77,6 +78,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS bookings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                mentor TEXT NOT NULL DEFAULT '',
                 email TEXT NOT NULL,
                 date TEXT NOT NULL,
                 time TEXT NOT NULL,
@@ -85,6 +87,9 @@ def init_db():
             )
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(bookings)").fetchall()}
+        if "mentor" not in columns:
+            conn.execute("ALTER TABLE bookings ADD COLUMN mentor TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_bookings_date_time ON bookings(date, time)")
         conn.execute(
             """
@@ -110,6 +115,17 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_sessions (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_sessions_email ON email_sessions(lower(email))")
         conn.execute("DROP INDEX IF EXISTS idx_bookings_email_unique")
         conn.execute(
             f"""
@@ -124,6 +140,7 @@ def row_to_dict(row):
     return {
         "id": row["id"],
         "name": row["name"],
+        "mentor": row["mentor"],
         "email": row["email"],
         "date": row["date"],
         "time": row["time"],
@@ -140,6 +157,7 @@ def parse_date(value):
 
 def validate_booking(payload):
     name = str(payload.get("name", "")).strip()
+    mentor = str(payload.get("mentor", "")).strip()
     email = normalize_email(payload.get("email", ""))
     booking_date = str(payload.get("date", "")).strip()
     booking_time = str(payload.get("time", "")).strip()
@@ -147,6 +165,8 @@ def validate_booking(payload):
 
     if not name:
         return None, "请输入姓名"
+    if not mentor:
+        return None, "请输入导师"
     if not EMAIL_RE.match(email):
         return None, "请输入有效邮箱"
     if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
@@ -156,7 +176,7 @@ def validate_booking(payload):
     if booking_time not in VALID_TIMES:
         return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 
-    return {"name": name, "email": email, "date": booking_date, "time": booking_time}, None
+    return {"name": name, "mentor": mentor, "email": email, "date": booking_date, "time": booking_time}, None
 
 
 def validate_booking_slot(payload):
@@ -255,6 +275,7 @@ def send_booking_confirmation_email(booking):
                 "",
                 "您的 AIAD 样机测试预约已成功。",
                 "",
+                f"导师：{booking['mentor']}",
                 f"预约日期：{booking['date']}",
                 f"预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
                 f"测试地点：{TEST_LOCATION}",
@@ -280,6 +301,7 @@ def send_booking_update_email(booking):
                 "",
                 "您的 AIAD 样机测试预约时间已修改。",
                 "",
+                f"导师：{booking['mentor']}",
                 f"新的预约日期：{booking['date']}",
                 f"新的预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
                 f"测试地点：{TEST_LOCATION}",
@@ -306,10 +328,46 @@ def verification_is_valid(conn, email):
     return bool(expires_at and expires_at >= datetime.now())
 
 
+def create_email_session(conn, email):
+    token = secrets.token_urlsafe(32)
+    now = datetime.now()
+    expires_at = now + timedelta(hours=EMAIL_SESSION_TTL_HOURS)
+    conn.execute("DELETE FROM email_sessions WHERE expires_at < ?", (format_dt(now),))
+    conn.execute(
+        """
+        INSERT INTO email_sessions (token, email, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (token, email, format_dt(expires_at), format_dt(now)),
+    )
+    return token, expires_at
+
+
+def email_session_is_valid(conn, email, token):
+    if not token:
+        return False
+    row = conn.execute(
+        """
+        SELECT expires_at
+        FROM email_sessions
+        WHERE token = ? AND lower(email) = lower(?)
+        """,
+        (token, email),
+    ).fetchone()
+    if not row:
+        return False
+    expires_at = parse_dt(row["expires_at"])
+    return bool(expires_at and expires_at >= datetime.now())
+
+
+def email_is_authorized(conn, email, token):
+    return email_session_is_valid(conn, email, token) or verification_is_valid(conn, email)
+
+
 def find_current_window_booking(conn, email):
     return conn.execute(
         """
-        SELECT id, name, email, date, time, created_at
+        SELECT id, name, mentor, email, date, time, created_at
         FROM bookings
         WHERE lower(email) = lower(?)
           AND date BETWEEN ? AND ?
@@ -388,7 +446,7 @@ def build_schedule_rows(query):
         with connect() as conn:
             booking_rows = conn.execute(
                 f"""
-                SELECT id, name, email, date, time, created_at
+                SELECT id, name, mentor, email, date, time, created_at
                 FROM bookings
                 WHERE date IN ({placeholders})
                 ORDER BY date, time
@@ -420,7 +478,7 @@ def build_schedule_rows(query):
                 continue
             if status == "available" and (is_booked or is_blocked):
                 continue
-            if search and (not row or search not in f"{row['name']} {row['email']}".lower()):
+            if search and (not row or search not in f"{row['name']} {row['mentor']} {row['email']}".lower()):
                 continue
             csv_rows.append(
                 {
@@ -429,6 +487,7 @@ def build_schedule_rows(query):
                     "时间段": f"{booking_time}-{add_minutes(booking_time, SLOT_MINUTES)}",
                     "状态": "已预约" if row else ("已占用" if is_blocked else "可预约"),
                     "姓名": row["name"] if row else "",
+                    "导师": row["mentor"] if row else "",
                     "邮箱": row["email"] if row else "",
                     "提交时间": row["created_at"] if row else "",
                 }
@@ -502,6 +561,9 @@ class BookingHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if path == "/api/bookings/by-email":
+            self.cancel_booking_by_email()
+            return
         if path.startswith("/api/bookings/"):
             if not self.require_admin():
                 return
@@ -612,7 +674,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
     def list_bookings(self):
         with connect() as conn:
             rows = conn.execute(
-                "SELECT id, name, email, date, time, created_at FROM bookings ORDER BY date, time"
+                "SELECT id, name, mentor, email, date, time, created_at FROM bookings ORDER BY date, time"
             ).fetchall()
         self.send_json([row_to_dict(row) for row in rows])
 
@@ -735,8 +797,14 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 "UPDATE email_verifications SET verified_at = ? WHERE lower(email) = lower(?)",
                 (format_dt(now), email),
             )
+            verification_token, verification_expires_at = create_email_session(conn, email)
             current_booking = find_current_window_booking(conn, email)
-        response = {"ok": True, "message": "邮箱验证通过。"}
+        response = {
+            "ok": True,
+            "message": "邮箱验证通过。",
+            "verificationToken": verification_token,
+            "verificationExpiresAt": format_dt(verification_expires_at),
+        }
         if current_booking:
             response["currentBooking"] = {
                 "date": current_booking["date"],
@@ -768,7 +836,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
                         HTTPStatus.CONFLICT,
                     )
                     return
-                if not verification_is_valid(conn, booking["email"]):
+                if not email_is_authorized(conn, booking["email"], str(payload.get("verificationToken", ""))):
                     self.send_json({"error": "请先完成邮箱验证码验证。"}, HTTPStatus.FORBIDDEN)
                     return
                 if slot_is_blocked(conn, booking["date"], booking["time"]):
@@ -776,11 +844,12 @@ class BookingHandler(SimpleHTTPRequestHandler):
                     return
                 cursor = conn.execute(
                     """
-                    INSERT INTO bookings (name, email, date, time, created_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO bookings (name, mentor, email, date, time, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         booking["name"],
+                        booking["mentor"],
                         booking["email"],
                         booking["date"],
                         booking["time"],
@@ -788,10 +857,9 @@ class BookingHandler(SimpleHTTPRequestHandler):
                     ),
                 )
                 row = conn.execute(
-                    "SELECT id, name, email, date, time, created_at FROM bookings WHERE id = ?",
+                    "SELECT id, name, mentor, email, date, time, created_at FROM bookings WHERE id = ?",
                     (cursor.lastrowid,),
                 ).fetchone()
-                conn.execute("DELETE FROM email_verifications WHERE lower(email) = lower(?)", (booking["email"],))
         except sqlite3.IntegrityError:
             self.send_json({"error": "该时间已被其他人预约，请选择其他时间。"}, HTTPStatus.CONFLICT)
             return
@@ -818,7 +886,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
         try:
             with connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                if not verification_is_valid(conn, slot["email"]):
+                if not email_is_authorized(conn, slot["email"], str(payload.get("verificationToken", ""))):
                     self.send_json({"error": "请先完成邮箱验证码验证。"}, HTTPStatus.FORBIDDEN)
                     return
 
@@ -839,10 +907,9 @@ class BookingHandler(SimpleHTTPRequestHandler):
                     (slot["date"], slot["time"], existing_booking["id"]),
                 )
                 row = conn.execute(
-                    "SELECT id, name, email, date, time, created_at FROM bookings WHERE id = ?",
+                    "SELECT id, name, mentor, email, date, time, created_at FROM bookings WHERE id = ?",
                     (existing_booking["id"],),
                 ).fetchone()
-                conn.execute("DELETE FROM email_verifications WHERE lower(email) = lower(?)", (slot["email"],))
         except sqlite3.IntegrityError:
             self.send_json({"error": "该时间已被其他人预约，请选择其他时间。"}, HTTPStatus.CONFLICT)
             return
@@ -853,6 +920,30 @@ class BookingHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             response["emailWarning"] = f"预约时间已修改，但通知邮件发送失败：{exc}"
         self.send_json(response)
+
+    def cancel_booking_by_email(self):
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        email = normalize_email(payload.get("email", ""))
+        if not EMAIL_RE.match(email):
+            self.send_json({"error": "请输入有效邮箱"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        with connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not email_is_authorized(conn, email, str(payload.get("verificationToken", ""))):
+                self.send_json({"error": "请先完成邮箱验证码验证。"}, HTTPStatus.FORBIDDEN)
+                return
+            existing_booking = find_current_window_booking(conn, email)
+            if not existing_booking:
+                self.send_json({"error": "该邮箱当前没有可取消的预约。"}, HTTPStatus.NOT_FOUND)
+                return
+            conn.execute("DELETE FROM bookings WHERE id = ?", (existing_booking["id"],))
+        self.send_json({"ok": True})
 
     def create_blocked_slot(self):
         try:
@@ -958,7 +1049,7 @@ def make_csv(rows):
     from io import StringIO
 
     output = StringIO()
-    writer = csv.DictWriter(output, fieldnames=["日期", "星期", "时间段", "状态", "姓名", "邮箱", "提交时间"])
+    writer = csv.DictWriter(output, fieldnames=["日期", "星期", "时间段", "状态", "姓名", "导师", "邮箱", "提交时间"])
     writer.writeheader()
     writer.writerows(rows)
     return output.getvalue()

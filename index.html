@@ -409,6 +409,12 @@
         font-size: 19px;
       }
 
+      .summary-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
       .primary {
         min-width: 144px;
         height: 58px;
@@ -425,6 +431,11 @@
         cursor: not-allowed;
         background: #9cb3b5;
         box-shadow: none;
+      }
+
+      .secondary.danger {
+        border-color: rgba(213, 63, 76, 0.45);
+        color: var(--red);
       }
 
       .records {
@@ -639,6 +650,11 @@
               <div class="error" id="nameError" aria-live="polite"></div>
             </div>
             <div class="field">
+              <label for="mentor">导师 <span class="required">*</span></label>
+              <input id="mentor" name="mentor" autocomplete="organization-title" placeholder="请输入导师姓名" />
+              <div class="error" id="mentorError" aria-live="polite"></div>
+            </div>
+            <div class="field">
               <label for="email">邮箱 <span class="required">*</span></label>
               <div class="verify-row">
                 <input id="email" name="email" type="email" autocomplete="email" placeholder="请输入您的邮箱" />
@@ -702,10 +718,14 @@
               <span>日期：<strong id="summaryDate">-</strong></span>
               <span>时间：<strong id="summaryTime">-</strong></span>
               <span>姓名：<strong id="summaryName">-</strong></span>
+              <span>导师：<strong id="summaryMentor">-</strong></span>
               <span>邮箱：<strong id="summaryEmail">-</strong></span>
             </div>
           </div>
-          <button class="primary" id="confirmBooking" type="button" disabled>确认预约</button>
+          <div class="summary-actions">
+            <button class="primary" id="confirmBooking" type="button" disabled>确认预约</button>
+            <button class="secondary danger" id="cancelBooking" type="button" hidden>取消已预约</button>
+          </div>
         </section>
 
         <section class="panel records" aria-label="已占用时间">
@@ -737,6 +757,8 @@
         selectedTime: "",
         bookings: [],
         verifiedEmail: "",
+        verificationToken: "",
+        verificationExpiresAt: "",
         currentBooking: null,
         verificationMessage: "请先发送验证码并完成邮箱验证。",
         sendingCode: false,
@@ -744,6 +766,7 @@
       };
 
       const nameInput = document.querySelector("#name");
+      const mentorInput = document.querySelector("#mentor");
       const emailInput = document.querySelector("#email");
       const emailCodeInput = document.querySelector("#emailCode");
       const sendCodeButton = document.querySelector("#sendCode");
@@ -752,6 +775,7 @@
       const dateTabs = document.querySelector("#dateTabs");
       const slotGroups = document.querySelector("#slotGroups");
       const confirmBooking = document.querySelector("#confirmBooking");
+      const cancelBooking = document.querySelector("#cancelBooking");
       const recordList = document.querySelector("#recordList");
       const toast = document.querySelector("#toast");
 
@@ -878,14 +902,16 @@
 
       function validateForm() {
         const name = nameInput.value.trim();
+        const mentor = mentorInput.value.trim();
         const email = normalizedEmail();
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
         const updating = isUpdateMode();
 
         document.querySelector("#nameError").textContent = name || updating ? "" : "请输入姓名";
+        document.querySelector("#mentorError").textContent = mentor || updating ? "" : "请输入导师";
         document.querySelector("#emailError").textContent = email ? (emailOk ? "" : "请输入有效邮箱") : "请输入邮箱";
 
-        sendCodeButton.disabled = !emailOk || state.sendingCode;
+        sendCodeButton.disabled = !emailOk || state.sendingCode || emailIsVerified();
         verifyCodeButton.disabled = !emailOk || !emailCodeInput.value.trim() || state.verifyingCode || emailIsVerified();
         verificationStatus.classList.toggle("ok", emailIsVerified());
         verificationStatus.textContent = emailIsVerified()
@@ -893,8 +919,10 @@
           : state.verificationMessage;
 
         confirmBooking.textContent = updating ? "修改预约" : "确认预约";
-        const valid = Boolean((name || updating) && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
+        const valid = Boolean((updating || (name && mentor)) && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
         confirmBooking.disabled = !valid;
+        cancelBooking.hidden = !updating;
+        cancelBooking.disabled = !updating;
         return valid;
       }
 
@@ -906,12 +934,15 @@
           ? `${state.selectedTime} - ${endTime(state.selectedTime)}`
           : "-";
         document.querySelector("#summaryName").textContent = nameInput.value.trim() || "-";
+        document.querySelector("#summaryMentor").textContent = mentorInput.value.trim() || "-";
         document.querySelector("#summaryEmail").textContent = emailInput.value.trim() || "-";
         validateForm();
       }
 
       function resetVerification() {
         state.verifiedEmail = "";
+        state.verificationToken = "";
+        state.verificationExpiresAt = "";
         state.currentBooking = null;
         state.verificationMessage = "请先发送验证码并完成邮箱验证。";
         emailCodeInput.value = "";
@@ -979,7 +1010,7 @@
         render();
       });
 
-      [nameInput, emailInput].forEach((input) => {
+      [nameInput, mentorInput, emailInput].forEach((input) => {
         input.addEventListener("input", renderSummary);
         input.addEventListener("blur", validateForm);
       });
@@ -1022,6 +1053,8 @@
             body: JSON.stringify({ email, code }),
           });
           state.verifiedEmail = email;
+          state.verificationToken = result.verificationToken || "";
+          state.verificationExpiresAt = result.verificationExpiresAt || "";
           state.currentBooking = result.currentBooking || null;
           if (state.currentBooking) {
             state.selectedDate = state.currentBooking.date;
@@ -1035,6 +1068,8 @@
           }
         } catch (error) {
           state.verifiedEmail = "";
+          state.verificationToken = "";
+          state.verificationExpiresAt = "";
           state.currentBooking = null;
           state.verificationMessage = error.message;
           showToast(error.message);
@@ -1057,7 +1092,9 @@
         try {
           const payload = {
             name: nameInput.value.trim(),
+            mentor: mentorInput.value.trim(),
             email: normalizedEmail(),
+            verificationToken: state.verificationToken,
             date: state.selectedDate,
             time: state.selectedTime,
           };
@@ -1067,15 +1104,36 @@
             body: JSON.stringify(payload),
           });
           showToast(booking.emailWarning || (updating ? "预约时间已修改，通知邮件已发送。" : "预约成功，确认邮件已发送。"));
+          state.currentBooking = booking;
+          state.selectedDate = booking.date;
           state.selectedTime = "";
-          state.verifiedEmail = "";
-          state.currentBooking = null;
-          state.verificationMessage = "请先发送验证码并完成邮箱验证。";
+          state.verificationMessage = `邮箱已验证。当前预约为 ${booking.date} ${booking.time} - ${endTime(booking.time)}，可继续修改或取消。`;
           emailCodeInput.value = "";
           await refreshBookings();
         } catch (error) {
           showToast(error.message);
           await refreshBookings();
+        }
+      });
+
+      cancelBooking.addEventListener("click", async () => {
+        if (!isUpdateMode()) return;
+        cancelBooking.disabled = true;
+        try {
+          await api("/api/bookings/by-email", {
+            method: "DELETE",
+            body: JSON.stringify({ email: normalizedEmail(), verificationToken: state.verificationToken }),
+          });
+          showToast("预约已取消。");
+          state.currentBooking = null;
+          state.selectedTime = "";
+          state.verificationMessage = "预约已取消。邮箱仍已验证，可直接重新预约。";
+          await refreshBookings();
+        } catch (error) {
+          showToast(error.message);
+          await refreshBookings();
+        } finally {
+          validateForm();
         }
       });
 

@@ -647,8 +647,8 @@
             </select>
           </div>
           <div class="field">
-            <label for="searchInput">预约人/邮箱</label>
-            <input id="searchInput" type="search" placeholder="搜索姓名或邮箱" />
+            <label for="searchInput">预约人/导师/邮箱</label>
+            <input id="searchInput" type="search" placeholder="搜索姓名、导师或邮箱" />
           </div>
           <div class="field actions">
             <button class="button" type="button" id="previewButton">预览</button>
@@ -721,6 +721,7 @@
                   <th>时间段</th>
                   <th>状态</th>
                   <th>预约人</th>
+                  <th>导师</th>
                   <th>邮箱</th>
                   <th>提交时间</th>
                   <th>操作</th>
@@ -891,7 +892,11 @@
             if (statusFilter.value === "booked" && !row.booking) return false;
             if (statusFilter.value === "blocked" && (row.booking || !row.blocked)) return false;
             if (statusFilter.value === "available" && (row.booking || row.blocked)) return false;
-            if (search && (!row.booking || !`${row.booking.name} ${row.booking.email}`.toLowerCase().includes(search))) return false;
+            if (
+              search &&
+              (!row.booking || !`${row.booking.name} ${row.booking.mentor || ""} ${row.booking.email}`.toLowerCase().includes(search))
+            )
+              return false;
             return true;
           });
       }
@@ -927,7 +932,7 @@
 
         scheduleBody.innerHTML = state.previewRows.length
           ? state.previewRows.map(renderRow).join("")
-          : `<tr><td colspan="7">当前筛选条件下没有可预览的周三、周四或周五时间段。</td></tr>`;
+          : `<tr><td colspan="8">当前筛选条件下没有可预览的周三、周四或周五时间段。</td></tr>`;
       }
 
       function renderRow(row) {
@@ -940,6 +945,7 @@
             <td><strong>${row.time} - ${endTime(row.time)}</strong></td>
             <td><span class="status ${statusClass}">${statusText}</span></td>
             <td>${booking ? escapeHtml(booking.name) : "-"}</td>
+            <td>${booking ? escapeHtml(booking.mentor || "-") : "-"}</td>
             <td>${booking ? escapeHtml(booking.email) : "-"}</td>
             <td>${booking ? escapeHtml(booking.createdAt) : row.blockedSlot ? escapeHtml(row.blockedSlot.createdAt) : "-"}</td>
             <td>${renderRowAction(row)}</td>
@@ -1078,6 +1084,7 @@
             <span>时间<strong>${row.time} - ${endTime(row.time)}</strong></span>
             <span>状态<strong>${statusText}</strong></span>
             <span>预约人<strong>${booking ? escapeHtml(booking.name) : "-"}</strong></span>
+            <span>导师<strong>${booking ? escapeHtml(booking.mentor || "-") : "-"}</strong></span>
             <span>邮箱<strong>${booking ? escapeHtml(booking.email) : "-"}</strong></span>
             <span>提交时间<strong>${booking ? escapeHtml(booking.createdAt) : row.blockedSlot ? escapeHtml(row.blockedSlot.createdAt) : "-"}</strong></span>
             ${
