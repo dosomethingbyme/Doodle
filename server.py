@@ -38,8 +38,10 @@ load_env_file(ROOT / ".env")
 
 DB_PATH = Path(os.environ.get("BOOKING_DB_PATH", ROOT / "bookings.sqlite3"))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "aiad-admin-2026")
+ADMIN_PASSWORD_IS_DEFAULT = ADMIN_PASSWORD == "aiad-admin-2026"
 ADMIN_SESSION_COOKIE = "booking_admin_session"
 ADMIN_SESSION_TOKEN = secrets.token_urlsafe(32)
+ADMIN_LOGIN_FAILURES = {}
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "0") or "0")
 SMTP_USER = os.environ.get("SMTP_USER", "")
@@ -56,6 +58,13 @@ TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 PUBLIC_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 VALID_STATUSES = {"draft", "published", "paused", "ended", "archived"}
 PUBLIC_STATUSES = {"published", "paused", "ended"}
+STATUS_TRANSITIONS = {
+    "draft": {"published", "archived"},
+    "published": {"paused", "ended"},
+    "paused": {"published", "ended"},
+    "ended": {"archived"},
+    "archived": {"ended"},
+}
 
 
 def connect():
@@ -348,8 +357,10 @@ def migrate_task_fields(conn):
 def init_db():
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        legacy_schema = table_exists(conn, "bookings") and "task_id" not in table_columns(conn, "bookings")
         create_task_tables(conn)
-        default_task_id = create_default_task(conn)
+        existing_task = conn.execute("SELECT id FROM tasks ORDER BY is_default DESC, id LIMIT 1").fetchone()
+        default_task_id = existing_task["id"] if existing_task else (create_default_task(conn) if legacy_schema else None)
         migrate_booking_tables(conn, default_task_id)
         migrate_task_fields(conn)
         conn.executescript(
@@ -657,20 +668,23 @@ def slot_map_for_task(conn, task):
     result = []
     chain_open_by_period = {}
     try:
-        today = datetime.now(ZoneInfo(task["timezone"])).date().isoformat()
+        local_now = datetime.now(ZoneInfo(task["timezone"]))
     except ZoneInfoNotFoundError:
-        today = date.today().isoformat()
+        local_now = datetime.now().astimezone()
     for slot in generate_slots(task):
         key = (slot["date"], slot["time"])
         period_key = (slot["date"], slot["periodId"])
         chain_open = chain_open_by_period.get(period_key, True)
         booking = bookings.get(key)
         block = blocked.get(key)
+        slot_start = datetime.combine(parse_date(slot["date"]), datetime.strptime(slot["time"], "%H:%M").time())
+        if local_now.tzinfo is not None:
+            slot_start = slot_start.replace(tzinfo=local_now.tzinfo)
         if booking:
             status = "booked"
         elif block:
             status = "blocked"
-        elif slot["date"] < today or task["status"] != "published":
+        elif slot_start <= local_now or task["status"] != "published":
             status = "closed"
         elif task["opening_strategy"] == "sequential" and not chain_open:
             status = "locked"
@@ -827,7 +841,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
             self.redirect(f"/b/{task['public_id']}" if task else "/admin")
             return
         if path == "/api/admin/session":
-            self.send_json({"authenticated": self.is_admin()})
+            self.send_json({"authenticated": self.is_admin(), "defaultPassword": ADMIN_PASSWORD_IS_DEFAULT})
             return
         if path == "/api/admin/tasks":
             if self.require_admin():
@@ -897,19 +911,30 @@ class BookingHandler(SimpleHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def admin_login(self):
+        client_ip = self.client_address[0]
+        cutoff = datetime.now() - timedelta(minutes=5)
+        failures = [value for value in ADMIN_LOGIN_FAILURES.get(client_ip, []) if value >= cutoff]
+        ADMIN_LOGIN_FAILURES[client_ip] = failures
+        if len(failures) >= 5:
+            self.send_json({"error": "登录失败次数过多，请 5 分钟后重试"}, HTTPStatus.TOO_MANY_REQUESTS)
+            return
         try:
             password = str(self.read_json().get("password", ""))
         except json.JSONDecodeError:
             self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
             return
         if not hmac.compare_digest(password, ADMIN_PASSWORD):
+            failures.append(datetime.now())
+            ADMIN_LOGIN_FAILURES[client_ip] = failures
             self.send_json({"error": "后台密码错误"}, HTTPStatus.UNAUTHORIZED)
             return
+        ADMIN_LOGIN_FAILURES.pop(client_ip, None)
         body = json.dumps({"ok": True}).encode()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Set-Cookie", f"{ADMIN_SESSION_COOKIE}={ADMIN_SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800")
+        secure = "; Secure" if self.headers.get("X-Forwarded-Proto", "").lower() == "https" else ""
+        self.send_header("Set-Cookie", f"{ADMIN_SESSION_COOKIE}={ADMIN_SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800{secure}")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1007,7 +1032,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 self.send_json([dict(row) for row in rows])
                 return
             if parts[4] == "export.csv":
-                self.export_csv(conn, task)
+                self.export_csv(conn, task, query)
                 return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1108,6 +1133,12 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 task = load_task(conn, task_id=task_id)
                 if not task:
                     self.send_json({"error": "任务不存在"}, HTTPStatus.NOT_FOUND)
+                    return
+                if status not in STATUS_TRANSITIONS.get(task["status"], set()):
+                    self.send_json(
+                        {"error": f"任务不能从“{task['status']}”直接切换到“{status}”"},
+                        HTTPStatus.CONFLICT,
+                    )
                     return
                 try:
                     task_today = datetime.now(ZoneInfo(task["timezone"])).date().isoformat()
@@ -1429,12 +1460,39 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 return
         self.send_json({"ok": True})
 
-    def export_csv(self, conn, task):
+    def export_csv(self, conn, task, query):
         output = io.StringIO()
-        fieldnames = ["状态", "日期", "时间", "姓名", "邮箱", *[field["label"] for field in task["fields"]], "提交时间", "取消时间", "取消原因"]
+        status = query.get("status", ["all"])[0]
+        search = query.get("search", [""])[0].strip().lower()
+        start_date = query.get("startDate", [""])[0]
+        end_date = query.get("endDate", [""])[0]
+        clauses = ["task_id=?"]
+        params = [task["id"]]
+        if status in ("confirmed", "cancelled"):
+            clauses.append("status=?")
+            params.append(status)
+        if start_date:
+            clauses.append("date>=?")
+            params.append(start_date)
+        if end_date:
+            clauses.append("date<=?")
+            params.append(end_date)
+        if search:
+            clauses.append("(lower(name) LIKE ? OR lower(email) LIKE ? OR lower(answers_json) LIKE ?)")
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern, pattern])
+        rows = conn.execute(
+            f"SELECT * FROM bookings WHERE {' AND '.join(clauses)} ORDER BY date, time, created_at",
+            params,
+        ).fetchall()
+        label_by_key = {field["field_key"]: field["label"] for field in task["fields"]}
+        for row in rows:
+            answers = json.loads(row["answers_json"] or "{}")
+            label_by_key.update(answers.get("__labels", {}))
+        fieldnames = ["状态", "日期", "时间", "姓名", "邮箱", *label_by_key.values(), "提交时间", "取消时间", "取消原因"]
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
-        for row in conn.execute("SELECT * FROM bookings WHERE task_id=? ORDER BY date, time", (task["id"],)):
+        for row in rows:
             booking = format_booking(row)
             item = {
                 "状态": "已预约" if booking["status"] == "confirmed" else "已取消",
@@ -1442,8 +1500,8 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 "姓名": booking["name"], "邮箱": booking["email"], "提交时间": booking["createdAt"],
                 "取消时间": booking["cancelledAt"] or "", "取消原因": booking["cancellationReason"],
             }
-            for field in task["fields"]:
-                item[field["label"]] = booking["answers"].get(field["field_key"], "")
+            for key, label in label_by_key.items():
+                item[label] = booking["answers"].get(key, "")
             writer.writerow(item)
         body = ("\ufeff" + output.getvalue()).encode("utf-8")
         self.send_response(HTTPStatus.OK)

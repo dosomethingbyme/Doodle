@@ -47,12 +47,44 @@ class BookingServerTests(unittest.TestCase):
             server.save_task_config(conn, cursor.lastrowid, data)
             return cursor.lastrowid, booking_date
 
-    def test_default_task_reproduces_existing_schedule(self):
+    def test_fresh_database_starts_without_business_specific_task(self):
+        with server.connect() as conn:
+            count = conn.execute("SELECT COUNT(*) count FROM tasks").fetchone()["count"]
+        self.assertEqual(count, 0)
+
+    def test_legacy_database_is_wrapped_in_default_task(self):
+        legacy_path = Path(self.tempdir.name) / "legacy.sqlite3"
+        server.DB_PATH = legacy_path
+        conn = sqlite3.connect(legacy_path)
+        conn.executescript(
+            """
+            CREATE TABLE bookings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                mentor TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE blocked_slots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO bookings (name, mentor, email, date, time, created_at)
+            VALUES ('旧用户', '旧导师', 'legacy@example.com', '2026-07-04', '09:30', '2026-07-01 10:00:00');
+            """
+        )
+        conn.close()
+        server.init_db()
         with server.connect() as conn:
             task = server.load_task(conn, task_id=1)
-        self.assertEqual(task["dates"], ["2026-07-04"])
-        self.assertEqual(task["slot_minutes"], 10)
-        self.assertEqual(len(server.generate_slots(task)), 42)
+            booking = conn.execute("SELECT task_id, email FROM bookings").fetchone()
+        self.assertEqual(task["title"], "AIAD 样机测试时间预约")
+        self.assertEqual(booking["task_id"], task["id"])
+        self.assertEqual(booking["email"], "legacy@example.com")
 
     def test_validation_rejects_overlapping_periods(self):
         payload = {
@@ -154,6 +186,17 @@ class BookingServerTests(unittest.TestCase):
         renamed, error = server.validate_task_input(payload)
         self.assertIsNone(error)
         self.assertEqual(renamed["fields"][0]["key"], "department")
+
+    def test_past_slot_on_current_day_is_closed(self):
+        task_id, _ = self.create_task("当天时间")
+        today = date.today().isoformat()
+        with server.connect() as conn:
+            conn.execute("DELETE FROM task_dates WHERE task_id=?", (task_id,))
+            conn.execute("INSERT INTO task_dates (task_id,date) VALUES (?,?)", (task_id, today))
+            conn.execute("UPDATE task_periods SET start_time='00:00',end_time='00:15' WHERE task_id=?", (task_id,))
+            task = server.load_task(conn, task_id=task_id)
+            slots = server.slot_map_for_task(conn, task)
+        self.assertEqual(slots[0]["status"], "closed")
 
 
 if __name__ == "__main__":
