@@ -6,3 +6,4 @@ __pycache__/
 bookings.sqlite3
 bookings.sqlite3-shm
 bookings.sqlite3-wal
+bookings.sqlite3.backup-*

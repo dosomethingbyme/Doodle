@@ -9,11 +9,11 @@ services:
       PORT: 8000
       BOOKING_DB_PATH: /data/bookings.sqlite3
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-aiad-admin-2026}
-      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
-      SMTP_PORT: ${SMTP_PORT:?SMTP_PORT is required}
-      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD is required}
-      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-0}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       SMTP_USE_SSL: ${SMTP_USE_SSL:-1}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-0}
     volumes:
