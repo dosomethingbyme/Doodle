@@ -35,15 +35,23 @@ def load_env_file(path):
 load_env_file(ROOT / ".env")
 
 DB_PATH = Path(os.environ.get("BOOKING_DB_PATH", ROOT / "bookings.sqlite3"))
-SLOT_MINUTES = 15
+SLOT_MINUTES = 10
+
+
+def time_range(start_hour, start_minute, end_hour, end_minute):
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+    return [f"{minutes // 60:02d}:{minutes % 60:02d}" for minutes in range(start, end, SLOT_MINUTES)]
+
+
 VALID_TIMES = [
-    *(f"{hour:02d}:{minute:02d}" for hour in range(9, 12) for minute in range(0, 60, SLOT_MINUTES)),
-    *(f"{hour:02d}:{minute:02d}" for hour in range(13, 17) for minute in range(0, 60, SLOT_MINUTES)),
+    *time_range(9, 30, 11, 30),
+    *time_range(13, 0, 18, 0),
 ]
-BOOKING_START_DATE = date(2026, 5, 20)
-BOOKING_END_DATE = date(2026, 5, 22)
-VALID_WEEKDAYS = (2, 3, 4)
-WEEKDAY_LABEL = "周三、周四、周五"
+BOOKING_START_DATE = date(2026, 7, 4)
+BOOKING_END_DATE = date(2026, 7, 4)
+VALID_WEEKDAYS = (5,)
+WEEKDAY_LABEL = "2026-07-04（周六）"
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "aiad-admin-2026")
 ADMIN_SESSION_COOKIE = "aiad_admin_session"
@@ -126,6 +134,7 @@ def init_db():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_email_sessions_email ON email_sessions(lower(email))")
         conn.execute("DROP INDEX IF EXISTS idx_bookings_email_unique")
+        conn.execute("DROP INDEX IF EXISTS idx_bookings_email_window_unique")
         conn.execute(
             f"""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_email_window_unique
@@ -171,7 +180,7 @@ def validate_booking(payload):
     if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
         return None, f"只能预约{WEEKDAY_LABEL}"
     if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
-        return None, "只能预约 2026-05-20 至 2026-05-22 的时间段"
+        return None, "只能预约 2026-07-04 的时间段"
     if booking_time not in VALID_TIMES:
         return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 
@@ -189,7 +198,7 @@ def validate_booking_slot(payload):
     if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
         return None, f"只能预约{WEEKDAY_LABEL}"
     if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
-        return None, "只能预约 2026-05-20 至 2026-05-22 的时间段"
+        return None, "只能预约 2026-07-04 的时间段"
     if booking_time not in VALID_TIMES:
         return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 
@@ -204,7 +213,7 @@ def validate_slot(payload):
     if not parsed or parsed.weekday() not in VALID_WEEKDAYS:
         return None, f"只能选择{WEEKDAY_LABEL}"
     if parsed < BOOKING_START_DATE or parsed > BOOKING_END_DATE:
-        return None, "只能选择 2026-05-20 至 2026-05-22 的时间段"
+        return None, "只能选择 2026-07-04 的时间段"
     if booking_time not in VALID_TIMES:
         return None, f"请选择有效的 {SLOT_MINUTES} 分钟时间窗"
 

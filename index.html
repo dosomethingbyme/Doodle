@@ -637,7 +637,7 @@
                 stroke-linejoin="round"
               />
             </svg>
-            每个预约窗口 15 分钟
+            每个预约窗口 10 分钟
           </div>
         </header>
 
@@ -741,10 +741,10 @@
 
     <script>
       const WEEK_DAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-      const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
-      const SLOT_MINUTES = 15;
+      const BOOKING_DATE_KEYS = ["2026-07-04"];
+      const SLOT_MINUTES = 10;
       const VERIFICATION_RESEND_SECONDS = 60;
-      const VALID_TIMES = [...generateTimes(9, 12), ...generateTimes(13, 17)];
+      const VALID_TIMES = [...generateTimes("09:30", "11:30"), ...generateTimes("13:00", "18:00")];
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", {
         year: "numeric",
@@ -811,9 +811,13 @@
         return BOOKING_DATE_KEYS.map(toDate);
       }
 
-      function generateTimes(startHour, endHour) {
+      function generateTimes(startTime, endTime) {
+        const [startHour, startMinute] = startTime.split(":").map(Number);
+        const [endHour, endMinute] = endTime.split(":").map(Number);
+        const start = startHour * 60 + startMinute;
+        const end = endHour * 60 + endMinute;
         const result = [];
-        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += SLOT_MINUTES) {
+        for (let minutes = start; minutes < end; minutes += SLOT_MINUTES) {
           const h = Math.floor(minutes / 60);
           const m = minutes % 60;
           result.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
@@ -868,8 +872,8 @@
 
       function renderSlots() {
         const groups = [
-          { label: "上午", range: "09:00-12:00", times: generateTimes(9, 12) },
-          { label: "下午", range: "13:00-17:00", times: generateTimes(13, 17) },
+          { label: "上午", range: "09:30-11:30", times: generateTimes("09:30", "11:30") },
+          { label: "下午", range: "13:00-18:00", times: generateTimes("13:00", "18:00") },
         ];
 
         slotGroups.innerHTML = groups

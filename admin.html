@@ -657,7 +657,7 @@
         </section>
 
         <div class="quick-actions" aria-label="预约日期">
-          <button class="button" type="button" id="bookingWindow">预约日期：5月20日至5月22日</button>
+          <button class="button" type="button" id="bookingWindow">预约日期：7月4日</button>
           <button class="button" type="button" id="refresh">刷新数据库</button>
         </div>
 
@@ -687,7 +687,7 @@
         <section class="panel calendar" aria-label="日历式预约预览">
           <div class="preview-head">
             <h2>日历式预约看板</h2>
-            <span id="calendarInfo">按周查看每个 15 分钟时间点是否已被预约。</span>
+            <span id="calendarInfo">按日期查看每个 10 分钟时间点是否已被预约。</span>
           </div>
           <div class="calendar-toolbar">
             <div class="admin-legend" aria-label="时间状态说明">
@@ -740,9 +740,9 @@
     <script>
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", weekday: "short" });
-      const BOOKING_DATE_KEYS = ["2026-05-20", "2026-05-21", "2026-05-22"];
-      const SLOT_MINUTES = 15;
-      const VALID_TIMES = [...rangeTimes(9, 12), ...rangeTimes(13, 17)];
+      const BOOKING_DATE_KEYS = ["2026-07-04"];
+      const SLOT_MINUTES = 10;
+      const VALID_TIMES = [...rangeTimes("09:30", "11:30"), ...rangeTimes("13:00", "18:00")];
       const state = { bookings: [], blockedSlots: [], previewRows: [], selectedDate: "", selectedSlotKeys: new Set() };
 
       const loginPanel = document.querySelector("#loginPanel");
@@ -764,9 +764,13 @@
       const exportLink = document.querySelector("#exportLink");
       const toast = document.querySelector("#toast");
 
-      function rangeTimes(startHour, endHour) {
+      function rangeTimes(startTime, endTime) {
+        const [startHour, startMinute] = startTime.split(":").map(Number);
+        const [endHour, endMinute] = endTime.split(":").map(Number);
+        const start = startHour * 60 + startMinute;
+        const end = endHour * 60 + endMinute;
         const result = [];
-        for (let minutes = startHour * 60; minutes < endHour * 60; minutes += SLOT_MINUTES) {
+        for (let minutes = start; minutes < end; minutes += SLOT_MINUTES) {
           const h = Math.floor(minutes / 60);
           const m = minutes % 60;
           result.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
@@ -778,8 +782,8 @@
         const exact = VALID_TIMES.map((time) => `<option value="${time}">${time} - ${endTime(time)}</option>`).join("");
         timeFilter.innerHTML = `
           <option value="all">全部时间段</option>
-          <option value="morning">上午 09:00-12:00</option>
-          <option value="afternoon">下午 13:00-17:00</option>
+          <option value="morning">上午 09:30-11:30</option>
+          <option value="afternoon">下午 13:00-18:00</option>
           ${exact}
         `;
       }
@@ -932,7 +936,7 @@
 
         scheduleBody.innerHTML = state.previewRows.length
           ? state.previewRows.map(renderRow).join("")
-          : `<tr><td colspan="8">当前筛选条件下没有可预览的周三、周四或周五时间段。</td></tr>`;
+          : `<tr><td colspan="8">当前筛选条件下没有可预览的 2026-07-04 时间段。</td></tr>`;
       }
 
       function renderRow(row) {
@@ -974,7 +978,7 @@
 
         calendarInfo.textContent = dates.length
           ? `${startDateInput.value} 至 ${endDateInput.value}，已选 ${state.selectedSlotKeys.size} 个时间段`
-          : "当前日期范围内没有周三、周四或周五。";
+          : "当前日期范围内没有 2026-07-04。";
         calendarDateTabs.innerHTML = dates.length
           ? dates
               .map((date) => {
@@ -1002,8 +1006,8 @@
         const morning = rows.filter((row) => row.time < "12:00");
         const afternoon = rows.filter((row) => row.time >= "13:00");
         calendarSlots.innerHTML = [
-          renderSlotGroup("上午", "09:00-12:00", morning),
-          renderSlotGroup("下午", "13:00-17:00", afternoon),
+          renderSlotGroup("上午", "09:30-11:30", morning),
+          renderSlotGroup("下午", "13:00-18:00", afternoon),
         ].join("");
         renderSlotDetail();
       }
@@ -1112,11 +1116,11 @@
       function setBookingWindow() {
         const dates = getBookingDates();
         startDateInput.value = dateKey(dates[0]);
-        endDateInput.value = dateKey(dates[2]);
+        endDateInput.value = dateKey(dates[dates.length - 1]);
         startDateInput.min = BOOKING_DATE_KEYS[0];
-        startDateInput.max = BOOKING_DATE_KEYS[2];
+        startDateInput.max = BOOKING_DATE_KEYS[BOOKING_DATE_KEYS.length - 1];
         endDateInput.min = BOOKING_DATE_KEYS[0];
-        endDateInput.max = BOOKING_DATE_KEYS[2];
+        endDateInput.max = BOOKING_DATE_KEYS[BOOKING_DATE_KEYS.length - 1];
         render();
       }
 

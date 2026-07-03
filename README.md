@@ -4,9 +4,9 @@
 
 ## 功能
 
-- 前台预约页：姓名、导师、邮箱、邮箱验证码、日期、15 分钟时间段选择。
-- 可预约日期：`2026-05-20` 至 `2026-05-22`，每天上午 `09:00-12:00`，下午 `13:00-17:00`。
-- 每个时间段 15 分钟，最后可选开始时间为 `11:45` 和 `16:45`。
+- 前台预约页：姓名、导师、邮箱、邮箱验证码、日期、10 分钟时间段选择。
+- 可预约日期：`2026-07-04`，上午 `09:30-11:30`，下午 `13:00-18:00`。
+- 每个时间段 10 分钟，最后可选开始时间为 `11:20` 和 `17:50`。
 - SQLite 数据库存储预约记录。
 - 数据库唯一约束防止同一日期同一时间段被重复预约。
 - 同一个邮箱只能预约一个时间段；创建或修改预约前必须先完成邮箱验证码验证。
@@ -130,7 +130,7 @@ aiad-admin-2026
 后台支持：
 
 - 选择开始日期和结束日期。
-- 选择全部时间段、上午、下午，或某一个具体 15 分钟时间段。
+- 选择全部时间段、上午、下午，或某一个具体 10 分钟时间段。
 - 按状态筛选：全部、只看已预约、只看已占用、只看可预约。
 - 按预约人姓名、导师或邮箱搜索。
 - 在日历式预约看板中点击时间段可多选，也可一键选择当天可预约或已占用时间；右侧面板支持批量占用或批量释放，表格行也提供单个占用/释放按钮。
@@ -209,8 +209,8 @@ Content-Type: application/json
   "mentor": "李老师",
   "email": "zhangsan@example.com",
   "verificationToken": "邮箱验证接口返回的 token",
-  "date": "2026-05-20",
-  "time": "09:00"
+  "date": "2026-07-04",
+  "time": "09:30"
 }
 ```
 
@@ -233,8 +233,8 @@ Content-Type: application/json
 {
   "email": "zhangsan@example.com",
   "verificationToken": "邮箱验证接口返回的 token",
-  "date": "2026-05-21",
-  "time": "13:15"
+  "date": "2026-07-04",
+  "time": "13:10"
 }
 ```
 
@@ -270,8 +270,8 @@ POST /api/blocked-slots
 Content-Type: application/json
 
 {
-  "date": "2026-05-21",
-  "time": "13:15"
+  "date": "2026-07-04",
+  "time": "13:10"
 }
 ```
 
@@ -282,8 +282,8 @@ DELETE /api/blocked-slots
 Content-Type: application/json
 
 {
-  "date": "2026-05-21",
-  "time": "13:15"
+  "date": "2026-07-04",
+  "time": "13:10"
 }
 ```
 
@@ -301,7 +301,7 @@ DELETE /api/bookings/{id}
 ### 导出 CSV
 
 ```http
-GET /api/export.csv?startDate=2026-05-20&endDate=2026-05-22&time=all&status=all
+GET /api/export.csv?startDate=2026-07-04&endDate=2026-07-04&time=all&status=all
 ```
 
 需要后台登录。
@@ -310,7 +310,7 @@ GET /api/export.csv?startDate=2026-05-20&endDate=2026-05-22&time=all&status=all
 
 - `startDate`：开始日期，格式 `YYYY-MM-DD`。
 - `endDate`：结束日期，格式 `YYYY-MM-DD`。
-- `time`：`all`、`morning`、`afternoon`，或具体时间如 `09:00`。
+- `time`：`all`、`morning`、`afternoon`，或具体时间如 `09:30`。
 - `status`：`all`、`booked`、`blocked`、`available`。
 - `search`：姓名、导师或邮箱关键词。
 
