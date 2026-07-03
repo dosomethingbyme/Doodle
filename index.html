@@ -303,6 +303,26 @@
         background: #edf1f3;
       }
 
+      .sample.locked {
+        border-color: #d8c7a4;
+        background: #fff6df;
+      }
+
+      .rule-notice {
+        margin: -12px 0 24px;
+        padding: 14px 16px;
+        border: 1px solid #d8c7a4;
+        border-radius: 8px;
+        background: #fffaf0;
+        color: #705317;
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .rule-notice strong {
+        color: #4f390b;
+      }
+
       .time-group {
         display: grid;
         grid-template-columns: 96px minmax(0, 1fr);
@@ -338,6 +358,10 @@
       }
 
       .slot {
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 2px;
         height: 54px;
         border: 1px solid var(--teal);
         border-radius: 6px;
@@ -367,6 +391,23 @@
         background: #edf1f3;
         color: #87919d;
         box-shadow: none;
+      }
+
+      .slot.locked:disabled {
+        border-color: #d8c7a4;
+        background: #fff6df;
+        color: #8a661f;
+      }
+
+      .slot-time,
+      .slot-state {
+        display: block;
+        line-height: 1.15;
+      }
+
+      .slot-state {
+        font-size: 12px;
+        font-weight: 650;
       }
 
       .summary {
@@ -694,6 +735,12 @@
             <div class="legend" aria-label="时间状态说明">
               <span class="legend-item"><span class="sample"></span>可预约</span>
               <span class="legend-item"><span class="sample busy"></span>已占用</span>
+              <span class="legend-item"><span class="sample locked"></span>待开放</span>
+            </div>
+
+            <div class="rule-notice" role="note" aria-label="预约规则">
+              <strong>预约规则：</strong>
+              上午和下午分别连续开放。上午第一段 09:30、下午第一段 13:00 可直接预约；其他时间段需前一个 10 分钟时间段已预约或后台占用后才可预约。
             </div>
 
             <div id="slotGroups" aria-live="polite"></div>
@@ -745,6 +792,7 @@
       const SLOT_MINUTES = 10;
       const VERIFICATION_RESEND_SECONDS = 60;
       const VALID_TIMES = [...generateTimes("09:30", "11:30"), ...generateTimes("13:00", "18:00")];
+      const PERIOD_START_TIMES = new Set(["09:30", "13:00"]);
       const MONTH_DAY = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
       const FULL_DATE = new Intl.DateTimeFormat("zh-CN", {
         year: "numeric",
@@ -835,6 +883,36 @@
         return state.bookings.some((booking) => booking.date === date && booking.time === time);
       }
 
+      function isCurrentBookingSlot(date, time) {
+        return Boolean(state.currentBooking && state.currentBooking.date === date && state.currentBooking.time === time);
+      }
+
+      function isOccupiedForRule(date, time) {
+        return state.bookings.some((booking) => booking.date === date && booking.time === time && !isCurrentBookingSlot(date, time));
+      }
+
+      function previousTime(time) {
+        if (PERIOD_START_TIMES.has(time)) return "";
+        const index = VALID_TIMES.indexOf(time);
+        return index > 0 ? VALID_TIMES[index - 1] : "";
+      }
+
+      function slotStatus(date, time) {
+        if (isBooked(date, time)) {
+          return { available: false, kind: "busy", label: "已占用", reason: "该时间段已被预约或后台占用，请选择其他时间。" };
+        }
+        const previous = previousTime(time);
+        if (previous && !isOccupiedForRule(date, previous)) {
+          return {
+            available: false,
+            kind: "locked",
+            label: "待开放",
+            reason: `需先预约或由后台占用前一个时间段 ${previous} - ${endTime(previous)}。`,
+          };
+        }
+        return { available: true, kind: "open", label: "可预约", reason: "" };
+      }
+
       function normalizedEmail() {
         return emailInput.value.trim().toLowerCase();
       }
@@ -887,16 +965,24 @@
                 <div class="slot-grid">
                   ${group.times
                     .map((time) => {
-                      const booked = isBooked(state.selectedDate, time);
+                      const status = slotStatus(state.selectedDate, time);
                       const selected = state.selectedTime === time;
+                      const disabled = !status.available;
+                      const stateClass = status.kind === "locked" ? "locked" : status.kind === "busy" ? "busy" : "";
+                      const ariaLabel = `${time} - ${endTime(time)}，${status.label}${status.reason ? `，${status.reason}` : ""}`;
                       return `
                         <button
-                          class="slot ${selected ? "selected" : ""}"
+                          class="slot ${stateClass} ${selected ? "selected" : ""}"
                           type="button"
                           data-time="${time}"
-                          ${booked ? "disabled" : ""}
+                          ${disabled ? "disabled" : ""}
                           aria-pressed="${selected}"
-                        >${time}</button>
+                          aria-label="${ariaLabel}"
+                          title="${status.reason || `${time} - ${endTime(time)}`}"
+                        >
+                          <span class="slot-time">${time}</span>
+                          <span class="slot-state">${selected ? "已选择" : status.label}</span>
+                        </button>
                       `;
                     })
                     .join("")}
@@ -932,20 +1018,34 @@
           ? state.verificationMessage
           : state.verificationMessage;
 
-        confirmBooking.textContent = updating ? "修改预约" : "确认预约";
-        const valid = Boolean((updating || (name && mentor)) && emailOk && emailIsVerified() && state.selectedDate && state.selectedTime);
-        confirmBooking.disabled = !valid;
+        confirmBooking.textContent = "确认预约";
+        confirmBooking.hidden = updating;
+        const selectedStatus = state.selectedTime ? slotStatus(state.selectedDate, state.selectedTime) : null;
+        const valid = Boolean(
+          !updating &&
+            name &&
+            mentor &&
+            emailOk &&
+            emailIsVerified() &&
+            state.selectedDate &&
+            state.selectedTime &&
+            selectedStatus &&
+            selectedStatus.available
+        );
+        confirmBooking.disabled = updating || !valid;
         cancelBooking.hidden = !updating;
         cancelBooking.disabled = !updating;
         return valid;
       }
 
       function renderSummary() {
-        document.querySelector("#summaryDate").textContent = state.selectedDate
-          ? `${MONTH_DAY.format(toDate(state.selectedDate))} ${WEEK_DAYS[toDate(state.selectedDate).getDay()]}`
+        const summaryDate = state.selectedDate || state.currentBooking?.date || "";
+        const summaryTime = state.selectedTime || state.currentBooking?.time || "";
+        document.querySelector("#summaryDate").textContent = summaryDate
+          ? `${MONTH_DAY.format(toDate(summaryDate))} ${WEEK_DAYS[toDate(summaryDate).getDay()]}`
           : "-";
-        document.querySelector("#summaryTime").textContent = state.selectedTime
-          ? `${state.selectedTime} - ${endTime(state.selectedTime)}`
+        document.querySelector("#summaryTime").textContent = summaryTime
+          ? `${summaryTime} - ${endTime(summaryTime)}`
           : "-";
         document.querySelector("#summaryName").textContent = nameInput.value.trim() || "-";
         document.querySelector("#summaryMentor").textContent = mentorInput.value.trim() || "-";
@@ -1011,6 +1111,9 @@
 
       function render() {
         renderDates();
+        if (state.selectedTime && !slotStatus(state.selectedDate, state.selectedTime).available) {
+          state.selectedTime = "";
+        }
         renderSlots();
         renderSummary();
         renderRecords();
@@ -1097,8 +1200,8 @@
           if (state.currentBooking) {
             state.selectedDate = state.currentBooking.date;
             state.selectedTime = "";
-            state.verificationMessage = `邮箱验证已通过。当前预约为 ${state.currentBooking.date} ${state.currentBooking.time} - ${endTime(state.currentBooking.time)}，请选择新的时间段。`;
-            showToast("邮箱验证通过，可以修改预约时间。");
+            state.verificationMessage = `邮箱验证已通过。当前预约为 ${state.currentBooking.date} ${state.currentBooking.time} - ${endTime(state.currentBooking.time)}。如需调整，请先取消已有预约后重新预约。`;
+            showToast("邮箱验证通过，可取消已有预约。");
             render();
           } else {
             state.verificationMessage = "邮箱验证已通过。";
@@ -1118,9 +1221,14 @@
       });
 
       confirmBooking.addEventListener("click", async () => {
+        if (isUpdateMode()) {
+          showToast("不支持直接修改预约，请先取消已有预约后重新预约。");
+          return;
+        }
         if (!validateForm()) return;
-        if (isBooked(state.selectedDate, state.selectedTime)) {
-          showToast("该时间已被占用，请选择其他时间。");
+        const status = slotStatus(state.selectedDate, state.selectedTime);
+        if (!status.available) {
+          showToast(status.reason || "该时间暂不可预约，请选择其他时间。");
           state.selectedTime = "";
           render();
           return;
@@ -1136,16 +1244,15 @@
             date: state.selectedDate,
             time: state.selectedTime,
           };
-          const updating = isUpdateMode();
-          const booking = await api(updating ? "/api/bookings/by-email" : "/api/bookings", {
-            method: updating ? "PUT" : "POST",
+          const booking = await api("/api/bookings", {
+            method: "POST",
             body: JSON.stringify(payload),
           });
-          showToast(booking.emailWarning || (updating ? "预约时间已修改，通知邮件已发送。" : "预约成功，确认邮件已发送。"));
+          showToast(booking.emailWarning || "预约成功，确认邮件已发送。");
           state.currentBooking = booking;
           state.selectedDate = booking.date;
           state.selectedTime = "";
-          state.verificationMessage = `邮箱已验证。当前预约为 ${booking.date} ${booking.time} - ${endTime(booking.time)}，可继续修改或取消。`;
+          state.verificationMessage = `邮箱已验证。当前预约为 ${booking.date} ${booking.time} - ${endTime(booking.time)}。如需调整，请先取消已有预约后重新预约。`;
           emailCodeInput.value = "";
           await refreshBookings();
         } catch (error) {

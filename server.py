@@ -48,6 +48,7 @@ VALID_TIMES = [
     *time_range(9, 30, 11, 30),
     *time_range(13, 0, 18, 0),
 ]
+PERIOD_START_TIMES = {"09:30", "13:00"}
 BOOKING_START_DATE = date(2026, 7, 4)
 BOOKING_END_DATE = date(2026, 7, 4)
 VALID_WEEKDAYS = (5,)
@@ -299,31 +300,7 @@ def send_booking_confirmation_email(booking):
                 f"预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
                 f"测试地点：{TEST_LOCATION}",
                 "",
-                "如需调整预约，请回到预约页并通过邮箱验证码修改预约时间。",
-                "",
-                "AIAD 预约系统",
-            ]
-        )
-    )
-    send_email_message(message)
-
-
-def send_booking_update_email(booking):
-    message = EmailMessage()
-    message["Subject"] = "AIAD 样机测试预约时间已修改"
-    message["From"] = SMTP_FROM
-    message["To"] = booking["email"]
-    message.set_content(
-        "\n".join(
-            [
-                f"{booking['name']}，您好：",
-                "",
-                "您的 AIAD 样机测试预约时间已修改。",
-                "",
-                f"导师：{booking['mentor']}",
-                f"新的预约日期：{booking['date']}",
-                f"新的预约时间：{booking['time']} - {add_minutes(booking['time'], SLOT_MINUTES)}",
-                f"测试地点：{TEST_LOCATION}",
+                "如需调整预约，请回到预约页取消已有预约后重新预约。",
                 "",
                 "AIAD 预约系统",
             ]
@@ -409,6 +386,35 @@ def slot_has_booking(conn, booking_date, booking_time):
         "SELECT 1 FROM bookings WHERE date = ? AND time = ?",
         (booking_date, booking_time),
     ).fetchone() is not None
+
+
+def previous_slot_time(booking_time):
+    if booking_time in PERIOD_START_TIMES:
+        return None
+    try:
+        return VALID_TIMES[VALID_TIMES.index(booking_time) - 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def slot_is_occupied(conn, booking_date, booking_time, excluding_booking_id=None):
+    booking_params = [booking_date, booking_time]
+    booking_query = "SELECT 1 FROM bookings WHERE date = ? AND time = ?"
+    if excluding_booking_id is not None:
+        booking_query += " AND id != ?"
+        booking_params.append(excluding_booking_id)
+    if conn.execute(booking_query, booking_params).fetchone() is not None:
+        return True
+    return slot_is_blocked(conn, booking_date, booking_time)
+
+
+def validate_continuous_booking(conn, booking_date, booking_time, excluding_booking_id=None):
+    previous_time = previous_slot_time(booking_time)
+    if previous_time is None:
+        return None
+    if slot_is_occupied(conn, booking_date, previous_time, excluding_booking_id):
+        return None
+    return f"该时间段尚未开放，请先预约或由后台占用前一个时间段 {previous_time} - {add_minutes(previous_time, SLOT_MINUTES)}。"
 
 
 def booking_dates():
@@ -850,6 +856,10 @@ class BookingHandler(SimpleHTTPRequestHandler):
                 if slot_is_blocked(conn, booking["date"], booking["time"]):
                     self.send_json({"error": "该时间已被后台占用，请选择其他时间。"}, HTTPStatus.CONFLICT)
                     return
+                continuity_error = validate_continuous_booking(conn, booking["date"], booking["time"])
+                if continuity_error:
+                    self.send_json({"error": continuity_error}, HTTPStatus.CONFLICT)
+                    return
                 cursor = conn.execute(
                     """
                     INSERT INTO bookings (name, mentor, email, date, time, created_at)
@@ -880,54 +890,7 @@ class BookingHandler(SimpleHTTPRequestHandler):
         self.send_json(response, HTTPStatus.CREATED)
 
     def update_booking_by_email(self):
-        try:
-            payload = self.read_json()
-        except json.JSONDecodeError:
-            self.send_json({"error": "请求格式错误"}, HTTPStatus.BAD_REQUEST)
-            return
-
-        slot, error = validate_booking_slot(payload)
-        if error:
-            self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)
-            return
-
-        try:
-            with connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if not email_is_authorized(conn, slot["email"], str(payload.get("verificationToken", ""))):
-                    self.send_json({"error": "请先完成邮箱验证码验证。"}, HTTPStatus.FORBIDDEN)
-                    return
-
-                existing_booking = find_current_window_booking(conn, slot["email"])
-                if not existing_booking:
-                    self.send_json({"error": "该邮箱当前没有可修改的预约。"}, HTTPStatus.NOT_FOUND)
-                    return
-
-                if existing_booking["date"] == slot["date"] and existing_booking["time"] == slot["time"]:
-                    self.send_json({"error": "请选择一个新的预约时间。"}, HTTPStatus.BAD_REQUEST)
-                    return
-                if slot_is_blocked(conn, slot["date"], slot["time"]):
-                    self.send_json({"error": "该时间已被后台占用，请选择其他时间。"}, HTTPStatus.CONFLICT)
-                    return
-
-                conn.execute(
-                    "UPDATE bookings SET date = ?, time = ? WHERE id = ?",
-                    (slot["date"], slot["time"], existing_booking["id"]),
-                )
-                row = conn.execute(
-                    "SELECT id, name, mentor, email, date, time, created_at FROM bookings WHERE id = ?",
-                    (existing_booking["id"],),
-                ).fetchone()
-        except sqlite3.IntegrityError:
-            self.send_json({"error": "该时间已被其他人预约，请选择其他时间。"}, HTTPStatus.CONFLICT)
-            return
-
-        response = row_to_dict(row)
-        try:
-            send_booking_update_email(response)
-        except Exception as exc:
-            response["emailWarning"] = f"预约时间已修改，但通知邮件发送失败：{exc}"
-        self.send_json(response)
+        self.send_json({"error": "不支持直接修改预约，请先取消已有预约后重新预约。"}, HTTPStatus.METHOD_NOT_ALLOWED)
 
     def cancel_booking_by_email(self):
         try:
