@@ -7,6 +7,8 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8000
+      APP_ENV: production
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8000}
       BOOKING_DB_PATH: /data/bookings.sqlite3
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a strong ADMIN_PASSWORD before starting Docker}
       SMTP_HOST: ${SMTP_HOST:-}

@@ -25,6 +25,16 @@
 - 修改开放规则如果会影响未来已有预约，系统会阻止保存并列出冲突。
 - SQLite 事务和任务级唯一约束防止重复预约。
 - 当天已经开始的时间段会按任务时区自动关闭。
+- 可设置最少提前预约时间和最远可预约天数。
+- 可针对某个日期关闭预约，或设置不同于默认值的独立开放时段。
+- 进行中的任务采用“编辑草稿 → 显式发布”流程；保存修改不会立即影响公开页，每次发布生成不可变版本快照。
+- 邮箱验证后可直接改期；原时间立即释放，预约编号不变，改期前后时间会保留在历史记录中。
+- V3 为每次预约生成 `APT-...` 编号、安全管理链接和稳定 UID 的 ICS 日历文件。
+- 可分别配置取消/改期截止时间、最多改期次数、预约政策、隐私说明和数据保留周期。
+- 管理员可按日查看跨任务议程、代客预约、代客改期、维护内部备注并查看预约事件时间线。
+- 后台账号和会话持久化，支持 Owner/Operator 两级权限、CSRF 防护和统一审计日志。
+- 邮件先写入可靠 Outbox，失败可自动或手动重试；预约保存不再依赖 SMTP 是否即时可用。
+- SMTP 可在后台“系统设置”覆盖；未覆盖的每个字段继续以 `.env` 为默认值，密码永不回显。
 
 ## 页面
 
@@ -37,6 +47,31 @@
 ```bash
 python3 server.py
 ```
+
+工程采用无第三方运行时依赖的分层结构：
+
+```text
+server.py                  兼容启动入口
+booking_app/config.py      环境配置
+booking_app/database.py    SQLite 连接、建表与迁移
+booking_app/domain.py      任务校验、时段与预约规则
+booking_app/emailer.py     邮件发送
+booking_app/handler.py     HTTP 基础设施与路由分发
+booking_app/admin_routes.py   管理接口
+booking_app/public_routes.py  公开预约接口
+static/admin.*             管理端样式与脚本
+static/admin_product.js    时间规则与发布版本交互
+static/admin_v3.js         V3 日程、通知、邮件和账号界面
+static/public.*            公开端样式与脚本
+```
+
+运行完整回归测试：
+
+```bash
+python3 -m unittest -v
+```
+
+测试包含数据库迁移与领域规则单元测试，以及基于真实本机 HTTP 服务的后台登录、任务发布、邮箱验证、预约、查询、取消和静态资源集成流程。
 
 本地开发默认后台密码：
 
@@ -51,6 +86,7 @@ ADMIN_PASSWORD='your-strong-password' python3 server.py
 ```
 
 后台使用默认密码时会持续显示安全告警；Docker 启动则必须显式提供强密码。
+当 `APP_ENV=production` 时，程序会拒绝使用默认密码启动。
 
 默认数据库为项目目录中的 `bookings.sqlite3`。可通过环境变量修改：
 
@@ -59,6 +95,8 @@ BOOKING_DB_PATH=/data/bookings.sqlite3 python3 server.py
 ```
 
 ## 邮箱配置
+
+`.env` 是邮件配置的默认层。Owner 可在后台的“系统设置 → 邮件服务器”保存覆盖值，或逐项恢复为 `.env` 默认值。密码留空表示保持当前值，API 永不返回明文密码。
 
 在项目根目录创建 `.env`：
 
@@ -110,6 +148,19 @@ ADMIN_PASSWORD='your-strong-password' docker compose up --build
 
 建议正式升级前备份 `bookings.sqlite3`。
 
+创建并立即校验在线一致性备份：
+
+```bash
+python3 scripts/backup.py
+python3 scripts/backup.py --verify backups/booking-YYYYMMDD-HHMMSS.sqlite3
+```
+
+恢复会先执行 `PRAGMA quick_check`，且默认拒绝覆盖现有数据库：
+
+```bash
+python3 scripts/backup.py --restore /path/to/backup.sqlite3 --force
+```
+
 ## 核心 API
 
 公开接口：
@@ -117,6 +168,8 @@ ADMIN_PASSWORD='your-strong-password' docker compose up --build
 ```text
 GET    /api/public/tasks/{publicId}
 POST   /api/public/tasks/{publicId}/bookings
+GET    /api/public/bookings/{bookingRef}?token={signedToken}
+GET    /api/public/bookings/{bookingRef}.ics?token={signedToken}
 POST   /api/public/tasks/{publicId}/bookings/lookup
 DELETE /api/public/tasks/{publicId}/bookings/by-email
 POST   /api/verification/send
@@ -131,10 +184,31 @@ POST   /api/admin/tasks
 GET    /api/admin/tasks/{id}
 PUT    /api/admin/tasks/{id}
 POST   /api/admin/tasks/{id}/status
+POST   /api/admin/tasks/{id}/publish
+GET    /api/admin/tasks/{id}/versions
 POST   /api/admin/tasks/{id}/copy
 GET    /api/admin/tasks/{id}/bookings
+POST   /api/admin/tasks/{id}/bookings
+PUT    /api/admin/tasks/{id}/bookings/{bookingId}
+GET    /api/admin/tasks/{id}/bookings/{bookingId}
 DELETE /api/admin/tasks/{id}/bookings/{bookingId}
 POST   /api/admin/tasks/{id}/blocked-slots
 DELETE /api/admin/tasks/{id}/blocked-slots
 GET    /api/admin/tasks/{id}/export.csv
+GET    /api/admin/agenda
+GET    /api/admin/notifications
+POST   /api/admin/notifications/retry
+GET    /api/admin/settings/email
+PUT    /api/admin/settings/email
+POST   /api/admin/settings/email/test
+GET    /api/admin/users
+POST   /api/admin/users
+PUT    /api/admin/users/{userId}
+GET    /api/admin/audit
+```
+
+公开预约改期接口：
+
+```text
+PUT    /api/public/tasks/{publicId}/bookings/by-email
 ```
